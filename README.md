@@ -1,5 +1,5 @@
 # parallel
-A few parallel imaging reconstruction algorithms. Basic MATLAB implementations.
+A few parallel MRI reconstruction algorithms. Basic MATLAB implementations.
 
 ## Generalized autocalibrating partially parallel acquisitions (GRAPPA)
 
