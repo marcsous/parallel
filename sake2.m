@@ -14,6 +14,15 @@ function ksp = sake2(data,mask,varargin)
 % References:
 %  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %  -Shin PJ et al. SAKE. Magn Resonance Medicine 2014;72:959
+%
+%% example dataset
+
+if nargin==0
+    disp('Running example...')
+    load phantom
+    data = fftshift(fft2(data));
+    mask = union(1:3:256,122:134);
+end
 
 %% setup
 

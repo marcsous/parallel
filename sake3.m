@@ -15,22 +15,18 @@ function [ksp mask] = sake3(data,mask,varargin)
 % References:
 %  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %  -Shin PJ et al. SAKE. Magn Resonance Medicine 2014;72:959
-
-%% Example
+%
+%% example dataset
 
 if nargin==0
-    fprintf('\nRunning example...\n')
+    disp('Running example...')
     load phantom3D_6coil.mat
-    data = fftshift(data); % put kspace center at the center of the matrix
-    data = data(87:170,19:end-19,7:90,:); % reduce matrix size for speed
-    data = data+1e-5*complex(randn(size(data)),randn(size(data))); % add noise
-    
+    data = fftshift(data);
     [nx ny nz nc] = size(data);
-    mask = false(nx,ny,nz); % sampling mask
-    mask(:,1:2:ny,1:1:nz) = 1; % undersampling
-    k = -4:4; % fully sample center of kspace
-    mask(:,ceil(ny/2)+k,ceil(nz/2)+k) = 1; % calibration
-
+    mask = false(ny,nz); % sampling mask
+    mask(1:2:ny,1:2:nz) = 1; % undersampling
+    k = -10:10; % fully sample center of kspace
+    mask(ceil(ny/2)+k,ceil(nz/2)+k) = 1; % calibration
     clearvars -except data mask varargin
 end
 
