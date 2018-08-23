@@ -15,7 +15,7 @@ Peter J. Shin, Peder E. Z. Larson, Michael A. Ohliger, Michael Elad, John M. Pau
 https://doi.org/10.1002/mrm.24997
 
 
-## Low-Rank Modeling of Localk-Space Neighborhoods (LORAKS) for Constrained MRI
+## Low-Rank Modeling of Local k-Space Neighborhoods (LORAKS) for Constrained MRI
 
 Justin P. Haldar
 
