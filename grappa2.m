@@ -91,11 +91,12 @@ fprintf('Number of coils = %i\n',nc);
 
 %% GRAPPA kernel and acs
 
+% indices in ky for the kernel
 for k = 1:opts.width
     idy(k) = 1+power(-1,k-1)*floor(k/2)*R;
 end
-idx = sort(opts.idx);
 idy = sort(idy);
+idx = sort(opts.idx);
 fprintf('Kernel: idx=[%s\b] and idy=[%s\b]\n',sprintf('%i ',idx),sprintf('%i ',idy))
 
 % handle calibration data
