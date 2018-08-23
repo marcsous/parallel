@@ -27,6 +27,7 @@ end
 %% options
 
 opts.width = 2; % no. of neighbors (ky) to use in kernel
+opts.idx = -opts.width:opts.width; % readout kernel (kx)
 opts.cal = []; % separate calibration data, if available
 opts.tol = []; % svd tolerance for calibration
 
@@ -90,13 +91,10 @@ fprintf('Number of coils = %i\n',nc);
 
 %% GRAPPA kernel and acs
 
-% neighbors in kx and ky used to create missing points
-idx = -opts.width:opts.width;
-
 for k = 1:opts.width
     idy(k) = 1+power(-1,k-1)*floor(k/2)*R;
 end
-idx = sort(idx);
+idx = sort(opts.idx);
 idy = sort(idy);
 fprintf('Kernel: idx=[%s\b] and idy=[%s\b]\n',sprintf('%i ',idx),sprintf('%i ',idy))
 
