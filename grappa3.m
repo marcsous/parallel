@@ -22,7 +22,7 @@ function ksp = grappa3(data,mask,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom3D_6coil.mat
+    load phantom3D_10coil.mat
     data = fftshift(data);
     [nx ny nz nc] = size(data);
     mask = false(ny,nz); % sampling mask
@@ -90,12 +90,6 @@ Rx = max(diff(kx));
 Ry = max(diff(ky));
 Rz = max(diff(kz));
 
-fprintf('Data size = %s\n',sprintf('%i ',size(data)));
-fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
-fprintf('Sampling in ky-kz = %ix%i\n',Ry,Rz);
-fprintf('Overall speedup factor %f\n',numel(mask)/nnz(mask));
-disp(opts);
-
 % basic checks
 if Rx>1
     error('sampling must be contiguous in kx-direction.')
@@ -125,6 +119,12 @@ for j = 0:numel(opts.p)
 end
 
 % display
+fprintf('Data size = %s\n',sprintf('%i ',size(data)));
+fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
+fprintf('Sampling in ky-kz = %ix%i\n',Ry,Rz);
+fprintf('Overall speedup factor %f\n',numel(mask)/nnz(mask));
+disp(opts);
+
 subplot(1,2,1); imagesc(yz+reshape(any(mask),ny,nz));
 title('sampling'); xlabel('kz'); ylabel('ky'); 
 
@@ -137,6 +137,20 @@ if nnz(yz)/numel(yz) < 0.9
     error('inadequate coverage - check sampling patterns.')
 end
 
+%% see if gpu is possible
+
+try
+    gpu = gpuDevice;
+    if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b'); end
+    data = gpuArray(data);
+    mask = gpuArray(mask);
+    fprintf('GPU found = %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
+catch ME
+    data = gather(data);
+    mask = gather(mask);
+    warning('%s. Using CPU.', ME.message);
+end
+
 %% GRAPPA acs
 
 if isempty(opts.cal)
@@ -145,8 +159,8 @@ if isempty(opts.cal)
     cal = data;
     
     % phase encode sampling    
-    yz = reshape(any(mask),ny,nz);
-    
+    yz = reshape(gather(any(mask)),ny,nz);
+
     % valid points along kx
     valid = kx(1)+max(opts.idx):kx(end)+min(opts.idx);
     
@@ -154,7 +168,8 @@ else
     
     % separate calibration data
     cal = cast(opts.cal,'like',data);
-    if size(cal,4)~=nc
+    
+    if size(cal,4)~=nc || ndims(cal)~=ndims(data)
         error('separate calibration data must have %i coils.',nc);
     end
     
@@ -177,31 +192,15 @@ for j = 1:numel(opts.p)
     acs{j} = find(conv2(yz,a,'same')>=nnz(a));
 
     % exclude acs lines from reconstruction
-    s{j}(acs{j}) = 0;
+    if isempty(opts.cal); s{j}(acs{j}) = 0; end
     
     fprintf('No. ACS lines for pattern %i = %i\n',j,numel(acs{j}));
 end
 
-% reshape to use indices (faster)
-cal = reshape(cal,size(cal,1),[],nc);
-
-%% see if gpu is possible
-
-try
-    gpu = gpuDevice;
-    if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b'); end
-    cal = gpuArray(cal);   
-    data = gpuArray(data);
-    mask = gpuArray(mask);
-    fprintf('GPU found = %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
-catch ME
-    cal = gather(cal);
-    data = gather(data);
-    mask = gather(mask);
-    warning('%s. Using CPU.', ME.message);
-end
-
 %% GRAPPA calibration
+
+% concatenate ky-kz to use indices (easier!)
+cal = reshape(cal,size(cal,1),[],nc);
 
 tic
 for j = 1:numel(opts.p)
@@ -209,24 +208,27 @@ for j = 1:numel(opts.p)
     % convolution matrix (compatible with convn)
     A = zeros(numel(valid),numel(acs{j}),numel(opts.idx),nnz(opts.p{j}),nc,'like',data);
 
-    for k = 1:numel(acs{j})
-        
-        % current acs point in ky and kz
-        [y z] = ind2sub([ny nz],acs{j}(k));
-        
-        % offsets to neighbors in ky and kz
-        [dy dz] = ind2sub(size(opts.p{j}),find(opts.p{j}));
-        
-        % neighbors as indices
-        index = sub2ind([ny nz],y-dy+c{j}(1),z-dz+c{j}(2));
+    % acs points in ky and kz
+    [y z] = ind2sub(size(yz),acs{j});
+    
+    % offsets to neighbors in ky and kz
+    [dy dz] = ind2sub(size(opts.p{j}),find(opts.p{j}));
 
+    % center the offsets
+    dy = dy-c{j}(1); dz = dz-c{j}(2);
+    
+    % neighbors in ky and kz as indices (idy)
+    for k = 1:numel(acs{j})
+
+        idy = sub2ind(size(yz),y(k)-dy,z(k)-dz);
+        
         for m = 1:numel(opts.idx)
-            A(:,k,m,:,:) = cal(valid-opts.idx(m),index,:);
+            A(:,k,m,:,:) = cal(valid-opts.idx(m),idy,:);
         end
         
     end
     B = cal(valid,acs{j},:);
-    
+
     % reshape into matrices and solve AX=B
     B = reshape(B,[],nc);
     A = reshape(A,size(B,1),[]);
@@ -239,10 +241,10 @@ for j = 1:numel(opts.p)
     else
         tol = opts.tol;
     end
-    S = S./(S.^2+tol^2); % tikhonov
-    S = diag(S.^2);
-    X = V*(S*(V'*(A'*B)));
-    
+    invS = S./(S.^2+tol^2); % tikhonov
+    X = V*(invS.^2.*(V'*(A'*B)));
+    clear A B V % reduce memory usage for next loop
+
     % resize for convolution and pad with zeros: extra work but easier
     X = reshape(X,numel(opts.idx),[],nc,nc);
     
@@ -253,10 +255,9 @@ for j = 1:numel(opts.p)
         end
     end
     Y{j} = reshape(Y{j},[numel(opts.idx) size(opts.p{j}) nc nc]);
-    clear A B X V S % reduce memory usage for gpu
 
 end
-fprintf('SVD tolerance = %.2e\n',tol);
+fprintf('SVD tolerance = %.2e (%.2f%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc;
 
 %% GRAPPA recon in passes

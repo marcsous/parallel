@@ -170,11 +170,10 @@ if isempty(opts.tol)
 else
     tol = opts.tol;
 end
-S = S./(S.^2+tol^2); % tikhonov
-S = diag(S.^2);
-X = V*(S*(V'*(A'*B)));
+invS = S./(S.^2+tol^2); % tikhonov
+X = V*(invS.^2.*(V'*(A'*B)));
 
-fprintf('SVD tolerance = %.2e\n',tol);
+fprintf('SVD tolerance = %.2e (%.2f%%)\n',tol,100*tol/S(1));
 
 % reshape for convolution
 X = reshape(X,numel(idx),numel(idy),nc,nc);
