@@ -22,14 +22,12 @@ function ksp = grappa3(data,mask,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom3D_32coil.mat
+    load phantom3D_28coil.mat
     data = fftshift(data);
-    [nx ny nz nc] = size(data);
-    mask = false(ny,nz); % sampling mask
-    mask(1:2:ny,1:2:nz) = 1; % undersampling
+    mask = false(121,96); % sampling mask
+    mask(1:2:end,1:2:end) = 1; % undersample
     varargin{1} = 'cal';
-    varargin{2} = data(:,50:70,40:60,:);
-    clearvars -except data mask varargin
+    varargin{2} = data(70:190,50:70,40:60,:);
 end
 
 %% options
