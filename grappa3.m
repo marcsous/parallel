@@ -22,13 +22,13 @@ function ksp = grappa3(data,mask,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom3D_10coil.mat
+    load phantom3D_32coil.mat
     data = fftshift(data);
     [nx ny nz nc] = size(data);
     mask = false(ny,nz); % sampling mask
     mask(1:2:ny,1:2:nz) = 1; % undersampling
-    k = -10:10; % fully sample center of kspace
-    mask(ceil(ny/2)+k,ceil(nz/2)+k) = 1; % calibration
+    varargin{1} = 'cal';
+    varargin{2} = data(:,50:70,40:60,:);
     clearvars -except data mask varargin
 end
 
@@ -194,7 +194,12 @@ for j = 1:numel(opts.p)
     % exclude acs lines from reconstruction
     if isempty(opts.cal); s{j}(acs{j}) = 0; end
     
-    fprintf('No. ACS lines for pattern %i = %i\n',j,numel(acs{j}));
+    fprintf('No. ACS lines for pattern %i = %i ',j,numel(acs{j}));
+    if isempty(opts.cal)
+        fprintf('(self cal)\n');
+    else
+        fprintf('(separate cal)\n');
+    end
 end
 
 %% GRAPPA calibration

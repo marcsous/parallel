@@ -5,7 +5,7 @@ function ksp = grappa2(data,mask,varargin)
 % Inputs:
 % -data is kspace [nx ny nc] with zeros in empty lines
 % -mask is binary array [nx ny] or can be linear indices
-% -varargin: pairs of options/values (e.g. 'tol',1)
+% -varargin: pairs of options/values (e.g. 'width',3)
 %
 % Output:
 % -ksp is reconstructed kspace [nx ny nc] for each coil
@@ -21,13 +21,15 @@ if nargin==0
     disp('Running example...')
     load phantom
     data = fftshift(fft2(data));
-    mask = union(1:3:256,122:134);
+    mask = 1:3:256;
+    varargin{1} = 'cal';
+    varargin{2} = data(90:160,120:140,:);
 end
 
 %% options
 
-opts.width = 2; % no. of neighbors (ky) to use in kernel
-opts.idx = -opts.width:opts.width; % readout kernel (kx)
+opts.width = 2; % no. neighbors to use in phase (ky)
+opts.idx = -2:2; % neighborhood to use in readout (kx)
 opts.cal = []; % separate calibration data, if available
 opts.tol = []; % svd tolerance for calibration
 
@@ -62,8 +64,8 @@ elseif isvector(mask)
 end
 mask = reshape(mask,nx,ny); % catch size mismatch
 
-% clean up data (nonsampled points must be zero)
-data = bsxfun(@times,data,mask);
+% clean data (nonsampled points must be zero)
+data = mask.*data;
 
 % indices of sampled phase encodes lines
 pe = find(any(mask,1));
@@ -121,12 +123,17 @@ else
     % checks on separate calibration data
     cal = cast(opts.cal,'like',data);
     
-    if size(cal,3)~=nc
+    if size(cal,3)~=nc || ndims(cal)~=ndims(data)
         error('separate calibration data must have %i coils.',nc);
     end
     
     % ACS lines (assume fully sampled)
-    acs = 1+max(idy):size(cal,2)+min(idy);
+    acs = [];
+    for j = 1:size(cal,2)
+        if all(ismember(j-idy,1:size(cal,2)))
+            acs = [acs j];
+        end
+    end
     
     % valid points along kx-direction (assume fully sampled)
     valid = 1+max(idx):size(cal,1)+min(idx);
