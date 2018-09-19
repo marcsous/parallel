@@ -28,8 +28,8 @@ end
 
 %% options
 
-opts.width = 2; % no. neighbors to use in phase (ky)
 opts.idx = -2:2; % neighborhood to use in readout (kx)
+opts.width = 2; % no. neighbors to use in phase (ky)
 opts.cal = []; % separate calibration data, if available
 opts.tol = []; % svd tolerance for calibration
 
@@ -56,33 +56,35 @@ if ~exist('mask','var') || isempty(mask)
     mask = any(data,3); % 2d mask [nx ny]
     warning('Argument ''mask'' not supplied - guessing.')
 elseif isvector(mask)
-    if ~isa(mask,'logical')
+    if nnz(mask~=0 & mask~=1)
         index = unique(mask); % allow indices
         mask = false(1,ny); mask(index) = 1;
     end
     mask = repmat(reshape(mask,1,ny),nx,1);
 end
-mask = reshape(mask,nx,ny); % catch size mismatch
+mask = reshape(mask>0,nx,ny); % size/class compatible
 
-% clean data (nonsampled points must be zero)
-data = mask.*data;
+% non-sampled points must be zero
+data = bsxfun(@times,data,mask);
 
-% indices of sampled phase encodes lines
+%% detect sampling
+
+% indices of sampled phase encode lines
 pe = find(any(mask,1));
 
-% detect speedup factor: equally spaced lines
+% detect speedup factor (equal spaced lines)
 for R = 1:nc+1
-    eq = pe(1):R:pe(end);
+    eq = pe(1):R:pe(end); % equal spaced
     if all(ismember(eq,pe)); break; end
 end
-if R>nc; error('ky sampling pattern not supported.'); end
+if R>nc; error('Sampling pattern in ky not supported.'); end
 
 % indices of sampled readout points
 ro = find(any(mask,2));
 
 % can only handle contiguous readout points
 if any(diff(ro)>1)
-    error('data must be contiguous in kx-direction.')
+    error('Sampling must be contiguous in kx-direction.')
 end
 
 % display
@@ -93,7 +95,7 @@ fprintf('Number of coils = %i\n',nc);
 
 %% GRAPPA kernel and acs
 
-% indices in ky for the kernel
+% offset indices for the kernel (ky)
 for k = 1:opts.width
     idy(k) = 1+power(-1,k-1)*floor(k/2)*R;
 end
@@ -115,19 +117,19 @@ if isempty(opts.cal)
         end
     end
     
-    % valid points along kx-direction
+    % valid points along kx
     valid = ro(1)+max(idx):ro(end)+min(idx);
 
 else
     
-    % checks on separate calibration data
+    % separate calibration data
     cal = cast(opts.cal,'like',data);
     
     if size(cal,3)~=nc || ndims(cal)~=ndims(data)
         error('separate calibration data must have %i coils.',nc);
     end
     
-    % ACS lines (assume fully sampled)
+    % detect ACS lines (assume fully sampled)
     acs = [];
     for j = 1:size(cal,2)
         if all(ismember(j-idy,1:size(cal,2)))
@@ -135,7 +137,7 @@ else
         end
     end
     
-    % valid points along kx-direction (assume fully sampled)
+    % valid points along kx (assume fully sampled)
     valid = 1+max(idx):size(cal,1)+min(idx);
     
 end
@@ -143,7 +145,10 @@ end
 na = numel(acs);
 nv = numel(valid);
 
-if na==0 || nv==0
+if nv<1
+    error('Not enough ACS points in kx (%i)',nv);
+end
+if na<1
     error('ACS lines = none')
 else
     fprintf('ACS region = [%i x %i] ',nv,na);
@@ -220,6 +225,6 @@ if nargout==0
     im = abs(ifft2(fftshift(ksp)));
     imagesc(sum(im,3)); % magnitude image
     title(sprintf('%s (R=%i)',mfilename,R));
-    clear
+    clear % avoid dumping to screen
 end
 

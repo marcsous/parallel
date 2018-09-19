@@ -2,8 +2,8 @@ function ksp = grappa3(data,mask,varargin)
 %
 % Implementation of GRAPPA for 3D images (yz-direction).
 %
-% Only does regular 2x2 sampling pattern. To use with
-% other sampling patterns, modify convolution patterns.
+% Only does regular 2x2 sampling. To use with other sampling,
+% modify convolution patterns (opts.p) below.
 %
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
@@ -22,12 +22,12 @@ function ksp = grappa3(data,mask,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom3D_28coil.mat
+    load phantom3D_6coil.mat
     data = fftshift(data);
     mask = false(121,96); % sampling mask
     mask(1:2:end,1:2:end) = 1; % undersample
     varargin{1} = 'cal';
-    varargin{2} = data(70:190,50:70,40:60,:);
+    varargin{2} = data(:,50:70,40:60,:); % separate calibration
 end
 
 %% options
@@ -36,7 +36,7 @@ opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration data, if available
 opts.tol = []; % svd tolerance for calibration
 
-% convolution patterns
+% ky-kz convolution patterns
 opts.p{1} = [1 0 1; 0 0 0; 1 0 1]; % diagonal
 opts.p{2} = [0 1 0; 1 0 1; 0 1 0]; % crosses
 
@@ -63,7 +63,7 @@ if ~exist('mask','var') || isempty(mask)
     mask = any(data,4); % 3d mask [nx ny nz]
     warning('Argument ''mask'' not supplied - guessing.')
 else
-    if ~isa(mask,'logical')
+    if nnz(mask~=0 & mask~=1)
         error('Argument ''mask'' type must be logical.')
     end
     if isequal(size(mask),[ny nz]) || isequal(size(mask),[1 ny nz])
@@ -72,9 +72,10 @@ else
         error('Argument ''mask'' size incompatible with data size.')
     end
 end
+mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
 
-% make sure data is clean
-data = mask.*data;
+% non-sampled points must be zero
+data = bsxfun(@times,data,mask);
 
 %% detect sampling
 
@@ -90,30 +91,24 @@ Rz = max(diff(kz));
 
 % basic checks
 if Rx>1
-    error('sampling must be contiguous in kx-direction.')
+    error('Sampling must be contiguous in kx-direction.')
 end
-if Ry>2
-    error('sampling must be 2-fold in ky-direction.')
-end
-if Rz>2
-    error('sampling must be 2-fold in kz-direction.')
-end
-if Ry==1 || Rz==1
-    error('Speed up in 1D only (Ry=%i Rz=%i): no 2nd pass needed\n',Ry,Rz);
+if Ry~=2 || Rz~=2
+    error('Sampling Ry=%i Rz=%i not supported (only 2x2)',Ry,Rz);
 end
 if Ry*Rz>nc
-    error('Speed up factor greater than no. coils (%i vs %i)\n',Ry*Rz,nc);
+    error('Speed up greater than no. coils (%i vs %i)',Ry*Rz,nc);
 end
 
-% sampling pattern after each pass of the recontruction
+% phase encode sampling pattern after each pass of recontruction
 for j = 0:numel(opts.p)
     if j==0
-        yz = reshape(any(mask),ny,nz);
+        yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
     else
         s{j} = conv2(yz,opts.p{j},'same')>=nnz(opts.p{j});
-        yz(s{j}) = 1;
+        yz(s{j}) = 1; % we now consider these lines sampled
     end
-    fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/numel(yz));
+    fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
 end
 
 % display
@@ -131,7 +126,8 @@ slice = ceil(nx/2); imagesc(squeeze(im(slice,:,:)));
 title(sprintf('%s (R=%ix%i)',mfilename,Ry,Rz));
 xlabel('z'); ylabel('y'); drawnow;
 
-if nnz(yz)/numel(yz) < 0.9
+% needs to check for adequate kspace coverage
+if nnz(yz)/(ny*nz) < 0.9
     error('inadequate coverage - check sampling patterns.')
 end
 
@@ -156,7 +152,7 @@ if isempty(opts.cal)
     % data is self-calibrated
     cal = data;
     
-    % phase encode sampling    
+    % phase encode sampling
     yz = reshape(gather(any(mask)),ny,nz);
 
     % valid points along kx
@@ -179,6 +175,11 @@ else
 
 end
 
+nv = numel(valid);
+if nv<1
+    error('Not enough ACS points in kx (%i)',nv);
+end
+
 % detect ACS lines for each sampling pattern
 for j = 1:numel(opts.p)
     
@@ -186,30 +187,35 @@ for j = 1:numel(opts.p)
     c{j} = ceil(size(opts.p{j})/2);
     
     % acs sampling pattern
-    a = opts.p{j}; a(c{j}) = 1;
+    a = opts.p{j}; a(c{j}) = 1; % center point
     acs{j} = find(conv2(yz,a,'same')>=nnz(a));
-
-    % exclude acs lines from reconstruction
-    if isempty(opts.cal); s{j}(acs{j}) = 0; end
+    na(j) =  numel(acs{j});
     
-    fprintf('No. ACS lines for pattern %i = %i ',j,numel(acs{j}));
+    fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
     if isempty(opts.cal)
         fprintf('(self cal)\n');
     else
         fprintf('(separate cal)\n');
     end
+    if na(j)<1
+        error('Not enough ACS lines (%i)',na(j));
+    end
+
+    % exclude acs lines from reconstruction
+    if isempty(opts.cal); s{j}(acs{j}) = 0; end
+    
 end
 
 %% GRAPPA calibration
+tic;
 
 % concatenate ky-kz to use indices (easier!)
 cal = reshape(cal,size(cal,1),[],nc);
 
-tic
 for j = 1:numel(opts.p)
     
     % convolution matrix (compatible with convn)
-    A = zeros(numel(valid),numel(acs{j}),numel(opts.idx),nnz(opts.p{j}),nc,'like',data);
+    A = zeros(nv,na(j),numel(opts.idx),nnz(opts.p{j}),nc,'like',data);
 
     % acs points in ky and kz
     [y z] = ind2sub(size(yz),acs{j});
@@ -220,9 +226,10 @@ for j = 1:numel(opts.p)
     % center the offsets
     dy = dy-c{j}(1); dz = dz-c{j}(2);
     
-    % neighbors in ky and kz as indices (idy)
-    for k = 1:numel(acs{j})
+    % convolution matrix
+    for k = 1:na(j)
 
+        % neighbors in ky and kz as indices (idy)
         idy = sub2ind(size(yz),y(k)-dy,z(k)-dz);
         
         for m = 1:numel(opts.idx)
@@ -232,7 +239,7 @@ for j = 1:numel(opts.p)
     end
     B = cal(valid,acs{j},:);
 
-    % reshape into matrices and solve AX=B
+    % reshape into matrix form
     B = reshape(B,[],nc);
     A = reshape(A,size(B,1),[]);
 
@@ -246,9 +253,9 @@ for j = 1:numel(opts.p)
     end
     invS = S./(S.^2+tol^2); % tikhonov
     X = V*(invS.^2.*(V'*(A'*B)));
-    clear A B V % reduce memory usage for next loop
+    clear A B V % reduce memory for next loop
 
-    % resize for convolution and pad with zeros: extra work but easier
+    % resize for convn and pad with zeros: extra work but easier
     X = reshape(X,numel(opts.idx),[],nc,nc);
     
     Y{j} = zeros(numel(opts.idx),numel(opts.p{j}),nc,nc,'like',X);
@@ -263,7 +270,7 @@ end
 fprintf('SVD tolerance = %.2e (%.2f%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc;
 
-%% GRAPPA recon in passes
+%% GRAPPA recon in multiple passes
 tic;
 
 for j = 1:numel(opts.p)
