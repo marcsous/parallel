@@ -96,12 +96,14 @@ end
 if Ry~=2 || Rz~=2
     error('Sampling Ry=%i Rz=%i not supported (only 2x2)',Ry,Rz);
 end
+if Ry*Rz>nc
+    error('Speed up greater than no. coils (%i vs %i)',Ry*Rz,nc);
+end
 
 % phase encode sampling pattern after each pass of recontruction
 for j = 0:numel(opts.p)
     if j==0
         yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
-        Rtot = (ny*nz)/nnz(yz); % total speed up factor
     else
         s{j} = conv2(yz,opts.p{j},'same')>=nnz(opts.p{j});
         yz(s{j}) = 1; % we now consider these lines sampled
@@ -111,8 +113,8 @@ end
 
 % display
 fprintf('Data size = %s\n',sprintf('%i ',size(data)));
-fprintf('Sampling in ky-kz = %ix%i (speedup %.1f)\n',Ry,Rz,Rtot);
 fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
+fprintf('Sampling in ky-kz = %ix%i\n',Ry,Rz);
 disp(opts);
 
 subplot(1,2,1); imagesc(yz+reshape(any(mask),ny,nz));
