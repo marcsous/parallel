@@ -1,20 +1,24 @@
-function [ksp mask] = sake3(data,mask,varargin)
+function ksp = sake3(data,mask,varargin)
 % ksp = sake3(data,mask,varargin)
 %
 % 3D MRI reconstruction based on matrix completion.
 % Low memory version does not form matrix but is slow.
 %
+% Singular value filtering is done based on opts.noise
+% which is a key parameter that affects image quality.
+%
 % Inputs:
-%  -data [nx ny nz nc]: 3d kspace data array from nc coils
-%  -mask [nx ny nz]: 3d sampling mask (or 2d [ny nz]) 
+%  -data [nx ny nz nc]: 3D kspace data array from nc coils
+%  -mask [nx ny nz]: 3D sampling mask (can be 2D [ny nz]) 
 %  -varargin: pairs of options/values (e.g. 'radial',1)
 %
 % Outputs:
-%  -ksp [nx ny nz nc]: 3d kspace data array from nc coils
+%  -ksp [nx ny nz nc]: 3D kspace data array from nc coils
 %
 % References:
 %  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %  -Shin PJ et al. SAKE. Magn Resonance Medicine 2014;72:959
+%  -Gavish M et al. Optimal Shrinkage of Singular Values 2016
 %
 %% example dataset
 
@@ -22,12 +26,11 @@ if nargin==0
     disp('Running example...')
     load phantom3D_6coil.mat
     data = fftshift(data);
-    [nx ny nz nc] = size(data);
-    mask = false(ny,nz); % sampling mask
-    mask(1:2:ny,1:2:nz) = 1; % undersampling
-    k = -10:10; % fully sample center of kspace
-    mask(ceil(ny/2)+k,ceil(nz/2)+k) = 1; % calibration
-    clearvars -except data mask varargin
+    mask = false(128,121,96); % sampling mask
+    mask(:,1:2:end,1:2:end) = 1; % undersample
+    varargin{1} = 'cal';
+    varargin{2} = data(:,50:70,40:60,:); % separate calibration
+    data = bsxfun(@times,data,mask); % clean up data
 end
 
 %% setup
@@ -35,12 +38,13 @@ end
 % default options
 opts.width = 3; % kernel width
 opts.radial = 1; % use radial kernel
-opts.tol = 1e-4; % relative tolerance
-opts.loraks = 0; % use phase constraint (loraks)
+opts.loraks = 0; % phase constraint (loraks)
+opts.tol = 1e-5; % relative tolerance
 opts.maxit = 1e4; % maximum no. iterations
 opts.noise = []; % noise std, if available
-opts.cal = []; % separate calibration data, if available
+opts.loss = 'fro'; % singular value filter (fro nuc op)
 opts.center = []; % center of kspace, if available
+opts.cal = []; % separate calibration data, if available
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -56,27 +60,28 @@ end
 %% initialize
 
 % argument checks
-if ndims(data)<3 || ndims(data)>4
-    error('Argument ''data'' must be a 4d array.')
+if ndims(data)<3 || ndims(data)>4 || ~isfloat(data)
+    error('''data'' must be a 4d float array.')
 end
 [nx ny nz nc] = size(data);
 
 if ~exist('mask','var') || isempty(mask)
-    mask = any(data,4); % 3d mask [nx ny nz]
-    warning('Argument ''mask'' not supplied - guessing.')
+    mask = any(data,4); % 3D mask [nx ny nz]
+    warning('''mask'' not supplied - guessing.')
 else
-    if ~isa(mask,'logical')
-        error('Argument ''mask'' type must be logical.')
+    if nnz(mask~=0 & mask~=1)
+        error('''mask'' must be binary.')
     end
-    if isequal(size(mask),[nx ny nz]) || isequal(size(mask),[1 ny nz]) || isequal(size(mask),[ny nz])
-        mask = reshape(mask,[],ny,nz); % compatible shape for bsxfun
-    else
-        error('Argument ''mask'' size incompatible with data size.')
+    if isequal(size(mask),[ny nz]) || isequal(size(mask),[1 ny nz])
+        mask = repmat(reshape(mask,1,ny,nz),nx,1,1);
+    elseif ~isequal(size(mask),[nx ny nz])
+        error('''mask'' size not compatible with ''data'' size.')
     end
 end
+mask = reshape(mask>0,nx,ny,nz); % ensire size/class compatibility
 
 % convolution kernel indicies
-[x y z] = ndgrid(-ceil(opts.width/2):ceil(opts.width/2));
+[x y z] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
 if opts.radial
     k = sqrt(x.^2+y.^2+z.^2)<=opts.width/2;
 else
@@ -86,10 +91,7 @@ nk = nnz(k);
 opts.kernel.x = x(k);
 opts.kernel.y = y(k);
 opts.kernel.z = z(k);
-
-% dimensions of the data set
-opts.dims = [nx ny nz nc nk];
-if opts.loraks; opts.dims = [opts.dims 2]; end
+opts.kernel.mask = k;
 
 % estimate center of kspace
 if isempty(opts.center)
@@ -105,30 +107,29 @@ opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 opts.flip.z = circshift(nz:-1:1,[0 2*opts.center(3)-1]);
 
-% memory required for calibration matrix
-k = gather(data(1)) * 0; % single or double
-bytes = 2 * prod(opts.dims) * getfield(whos('k'),'bytes');
-
 % sampling info
 density = nnz(mask) / numel(mask);
+
+% dimensions of the data set
+opts.dims = [nx ny nz nc nk];
+if opts.loraks; opts.dims = [opts.dims 2]; end
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Sampling density = %f\n',density);
-fprintf('Matrix = %ix%i (%.1f Gb)\n',nx*ny*nz,prod(opts.dims(4:end)),bytes/1e9);
 
 %% see if gpu is possible
 
 try
     gpu = gpuDevice;
-    if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b'); end
+    if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b.'); end
     data = gpuArray(data);
     mask = gpuArray(mask);
-    fprintf('GPU found = %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
+    fprintf('GPU found: %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
 catch ME
     data = gather(data);
     mask = gather(mask);
-    warning('%s. Using CPU.', ME.message);
+    warning('%s Using CPU.', ME.message);
 end
 
 %% separate calibration data
@@ -151,12 +152,9 @@ end
 
 %% Cadzow algorithm
 
-ksp = zeros(nx,ny,nz,nc,'like',data);
+ksp = data;
 
 for iter = 1:opts.maxit
-    
-    % data consistency
-    ksp = bsxfun(@times,data,mask)+bsxfun(@times,ksp,~mask);
 
     % normal calibration matrix
     AA = make_data_matrix(ksp,opts);
@@ -170,68 +168,37 @@ for iter = 1:opts.maxit
         S = sqrt(S);
     end
 
-    % estimate noise from singular values
-    if isempty(opts.noise)
-        for j = 1:numel(S)
-            h = hist(S(j:end),sqrt(numel(S)-j));
-            [~,k] = max(h);
-            if k>1; break; end
-        end
-        noise_floor = median(S(j:end));
-        
-        if noise_floor==0
-            error('Noise floor estimation failed.');
-        else
-            opts.noise = noise_floor / sqrt(2*density*nx*ny*nz);
-            disp(['Estimated noise std = ' num2str(opts.noise)]);
-        end
-    else
-        noise_floor = opts.noise * sqrt(2*density*nx*ny*nz);
-    end
-    
-    % minimum variance filter
-    f = max(0,1-noise_floor.^2./S.^2);
+    % singular value filtering (ref. Gavish)
+    sigma = opts.noise * sqrt(density*nx*ny*nz);
+    [f sigma] = optimal_shrinkage(S,size(AA,2)/(nx*ny*nz),opts.loss,sigma);
+    f = f ./ S; % the filter such that S --> f.*S
     F = V * diag(f) * V';
+
+    % noise std estimate, if not provided
+    if isempty(opts.noise)
+        opts.noise = gather(sigma) / sqrt(density*nx*ny*nz);
+        fprintf('Estimated opts.noise = %.2e\n',opts.noise);
+    end
  
     % hankel structure (average along anti-diagonals)  
     ksp = undo_data_matrix(F,ksp,opts);
-
-    % convergence
+    
+    % data consistency
+    ksp = bsxfun(@times,data,mask)+bsxfun(@times,ksp,~mask);
+    
+    % check convergence
     normA(iter) = sum(S);
-    if iter==1; old = NaN; end
-    tol(iter) = norm(ksp(:)-old(:))/norm(ksp(:));
+    if iter==1
+        tol(iter) = opts.tol;
+    else
+        tol(iter) = gather(norm(ksp(:)-old(:))/norm(ksp(:)));
+    end
     old = ksp;
     converged = tol(iter) < opts.tol;
     
     % display every few iterations
-    if true || converged
-        
-        % plot singular values
-        subplot(1,4,1); plot(S/S(1));
-        hold on; plot(max(f,min(ylim)),'--'); hold off
-        line(xlim,gather([noise_floor noise_floor]/S(1)),'linestyle',':','color','black');
-        legend({'singular vals.','min. var. filter','noise floor'});
-        title(sprintf('rank %i',nnz(f>0))); xlim([0 numel(S)+1]);
-        
-        % show current kspace
-        subplot(1,4,2); slice = ceil(nx/2);
-        temp = squeeze(log(sum(abs(ksp(slice,:,:,:)),4)));
-        imagesc(temp); xlabel('kz'); ylabel('ky'); title('kspace');
-        
-        % show current image
-        subplot(1,4,3);
-        temp = ifft(ksp); temp = squeeze(temp(slice,:,:,:));
-        imagesc(sum(abs(ifft2(temp)),3)); xlabel('z'); ylabel('y');
-        title(sprintf('iter %i',iter));
-        
-        % plot change in norm
-        subplot(1,4,4); warning('off','MATLAB:Axes:NegativeLimitsInLogAxis');
-        [h,~,~] = plotyy(1:iter,tol,1:iter,normA);
-        axis(h,'tight'); set(h(1),'YScale','log'); set(h(2),'YScale','log');
-        title('metrics'); legend({'||Δk||/||k||','||A||_* norm'});
-        xlim(h(1),[0 iter+1]); xlim(h(2),[0 iter+1]); xlabel('iters');
-        drawnow;
-        
+    if mod(iter,2)==1 || converged
+        display(S,f,sigma,ksp,iter,tol,opts,normA);
     end
 
     % finish when nothing left to do
@@ -239,9 +206,7 @@ for iter = 1:opts.maxit
  
 end
 
-% return on CPU
-ksp = gather(ksp);
-mask = gather(mask);
+if nargout==0; clear; end % avoid dumping to screen
 
 %% make normal calibration matrix (low memory)
 function AA = make_data_matrix(data,opts)
@@ -253,6 +218,7 @@ nc = size(data,4);
 nk = opts.dims(5);
 
 AA = zeros(nc,nk,nc,nk,'like',data);
+
 if opts.loraks
     BB = zeros(nc,nk,nc,nk,'like',data);
 end
@@ -307,6 +273,7 @@ if ~opts.loraks
 else
     F = reshape(F,nc,2*nk,nc,2*nk);
 end
+
 ksp = zeros(nx,ny,nz,nc,'like',data);
 
 for j = 1:nk
@@ -351,3 +318,27 @@ if ~opts.loraks
 else
     ksp = ksp / (2*nk);
 end
+
+%% show plots of various things
+function display(S,f,sigma,ksp,iter,tol,opts,normA)
+
+% plot singular values
+subplot(1,4,1); plot(S/S(1)); title(sprintf('rank %i',nnz(f))); 
+hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
+line(xlim,gather([1 1]*sigma/S(1)),'linestyle',':','color','black');
+legend({'singular vals.','sing. val. filter','noise floor'});
+
+% show current kspace
+subplot(1,4,2); slice = ceil(size(ksp,1)/2);
+tmp = squeeze(log(sum(abs(ksp(slice,:,:,:)),4)));
+imagesc(tmp); xlabel('kz'); ylabel('ky'); title('kspace');
+
+% show current image
+subplot(1,4,3); tmp = ifft(ksp); tmp = squeeze(tmp(slice,:,:,:));
+imagesc(sum(abs(ifft2(tmp)),3)); xlabel('z'); ylabel('y');
+title(sprintf('iter %i',iter));
+
+% plot change in norm and tol
+subplot(1,4,4); h = plotyy(1:iter,tol,1:iter,normA,'semilogy','semilogy');
+axis(h,'tight'); xlabel('iters'); xlim(h,[0 iter+1]); title('metrics');
+legend({'||Δk||/||k||','||A||_* norm'}); drawnow;
