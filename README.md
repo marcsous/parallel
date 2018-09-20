@@ -26,7 +26,7 @@ https://doi.org/10.1109/TMI.2013.2293974
 
 Danny Barash, Matan Gavish
 
-arxiv.org/pdf/1405.7511v2 
+https://arxiv.org/pdf/1405.7511v2 
 
 Code Supplement for "Optimal Shrinkage of Singular Values"
 
