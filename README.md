@@ -22,7 +22,7 @@ Justin P. Haldar
 https://doi.org/10.1109/TMI.2013.2293974
 
 
-## Optimal Shrinkage of Singular Values Under Random Data Contamination
+## Optimal Shrinkage of Singular Values
 
 Danny Barash and Matan Gavish
 
