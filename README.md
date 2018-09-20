@@ -24,8 +24,10 @@ https://doi.org/10.1109/TMI.2013.2293974
 
 ## Optimal Shrinkage of Singular Values
 
-Danny Barash and Matan Gavish
+Danny Barash, Matan Gavish
 
-Code Supplement for "Optimal Shrinkage of Singular Values" (2016)
+arxiv.org/pdf/1405.7511v2 
+
+Code Supplement for "Optimal Shrinkage of Singular Values"
 
 https://purl.stanford.edu/kv623gt2817
