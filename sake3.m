@@ -18,7 +18,6 @@ function ksp = sake3(data,mask,varargin)
 % References:
 %  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %  -Shin PJ et al. SAKE. Magn Resonance Medicine 2014;72:959
-%  -Gavish M et al. Optimal Shrinkage of Singular Values 2016
 %
 %% example dataset
 
@@ -36,13 +35,12 @@ end
 %% setup
 
 % default options
-opts.width = 3; % kernel width
+opts.width = 4; % kernel width
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % phase constraint (loraks)
 opts.tol = 1e-5; % relative tolerance
-opts.maxit = 1e4; % maximum no. iterations
+opts.maxit = 1e2; % maximum no. iterations
 opts.noise = []; % noise std, if available
-opts.loss = 'fro'; % singular value filter (fro nuc op)
 opts.center = []; % center of kspace, if available
 opts.cal = []; % separate calibration data, if available
 
@@ -93,6 +91,10 @@ opts.kernel.y = y(k);
 opts.kernel.z = z(k);
 opts.kernel.mask = k;
 
+% dimensions of the data set
+opts.dims = [nx ny nz nc nk 1];
+if opts.loraks; opts.dims(6) = 2; end
+
 % estimate center of kspace
 if isempty(opts.center)
     [~,k] = max(reshape(data,[],nc));
@@ -108,15 +110,11 @@ opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 opts.flip.z = circshift(nz:-1:1,[0 2*opts.center(3)-1]);
 
 % sampling info
-density = nnz(mask) / numel(mask);
-
-% dimensions of the data set
-opts.dims = [nx ny nz nc nk];
-if opts.loraks; opts.dims = [opts.dims 2]; end
+matrix_density = nnz(mask) / numel(mask);
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
-fprintf('Sampling density = %f\n',density);
+fprintf('Density = %f\n',matrix_density);
 
 %% see if gpu is possible
 
@@ -152,42 +150,47 @@ end
 
 %% Cadzow algorithm
 
-ksp = data;
+ksp = zeros(size(data),'like',data);
 
 for iter = 1:opts.maxit
 
+    % data consistency
+    ksp = bsxfun(@times,data,mask)+bsxfun(@times,ksp,~mask);
+    
     % normal calibration matrix
     AA = make_data_matrix(ksp,opts);
 
     % row space and singular values
     if isempty(opts.cal)
-        [V S] = svd(AA);
-        S = sqrt(diag(S));
+        [V W] = svd(AA);
+        W = sqrt(diag(W));
     else
-        S = svd(AA);
-        S = sqrt(S);
+        W = svd(AA);
+        W = sqrt(W);
     end
 
-    % singular value filtering (ref. Gavish)
-    sigma = opts.noise * sqrt(density*nx*ny*nz);
-    [f sigma] = optimal_shrinkage(S,size(AA,2)/(nx*ny*nz),opts.loss,sigma);
-    f = f ./ S; % the filter such that S --> f.*S
-    F = V * diag(f) * V';
-
-    % noise std estimate, if not provided
+    % estimate noise floor of singular values
     if isempty(opts.noise)
-        opts.noise = gather(sigma) / sqrt(density*nx*ny*nz);
-        fprintf('Estimated opts.noise = %.2e\n',opts.noise);
+        for j = 1:numel(W)
+            h = hist(W(j:end),sqrt(numel(W)-j));
+            [~,k] = max(h);
+            if k>1; break; end
+        end
+        sigma = median(W(j:end));
+        opts.noise = sigma / sqrt(matrix_density*nx*ny);
+        fprintf('Noise std estimate: %.2e\n',opts.noise);
     end
- 
+    sigma = opts.noise * sqrt(matrix_density*nx*ny);
+
+    % minimum variance filter
+    f = max(0,1-sigma.^2./W.^2); 
+    F = V * diag(f) * V';
+    
     % hankel structure (average along anti-diagonals)  
     ksp = undo_data_matrix(F,ksp,opts);
     
-    % data consistency
-    ksp = bsxfun(@times,data,mask)+bsxfun(@times,ksp,~mask);
-    
     % check convergence
-    normA(iter) = sum(S);
+    normA(iter) = sum(W);
     if iter==1
         tol(iter) = opts.tol;
     else
@@ -198,7 +201,7 @@ for iter = 1:opts.maxit
     
     % display every few iterations
     if mod(iter,2)==1 || converged
-        display(S,f,sigma,ksp,iter,tol,opts,normA);
+        display(W,f,sigma,ksp,iter,tol,opts,normA);
     end
 
     % finish when nothing left to do
@@ -296,7 +299,7 @@ for j = 1:nk
             chunkZ = reshape(colA,[],nc) * squeeze(F(:,j,:,k+nk));
             chunkZ = chunkZ + reshape(colZ,[],nc) * squeeze(F(:,j+nk,:,k+nk));
             chunkZ = reshape(chunkZ,nx,ny,nz,nc);
-            chunkZ = conj(chunkZ(opts.flip.x,opts.flip.y,opts.flip.y,:));
+            chunkZ = conj(chunkZ(opts.flip.x,opts.flip.y,opts.flip.z,:));
             chunkA = reshape(chunkA,nx,ny,nz,nc) + chunkZ;
         else
             chunkA = reshape(chunkA,nx,ny,nz,nc);
@@ -320,12 +323,12 @@ else
 end
 
 %% show plots of various things
-function display(S,f,sigma,ksp,iter,tol,opts,normA)
+function display(W,f,sigma,ksp,iter,tol,opts,normA)
 
 % plot singular values
-subplot(1,4,1); plot(S/S(1)); title(sprintf('rank %i',nnz(f))); 
+subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i',nnz(f))); 
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
-line(xlim,gather([1 1]*sigma/S(1)),'linestyle',':','color','black');
+line(xlim,gather([1 1]*sigma/W(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % show current kspace
