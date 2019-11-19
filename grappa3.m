@@ -2,21 +2,32 @@ function ksp = grappa3(data,mask,varargin)
 %
 % Implementation of GRAPPA for 3D images (yz-direction).
 %
-% Only does regular 2x2 sampling. To use with other sampling,
-% modify convolution patterns (opts.p) below.
+% Configured for 2x2 sampling but may be modified for
+% others by setting up the convolution patterns (opts.p).
+% E.g. two patterns that are pre-configured
 %
+% (1) 2x2 regular: o x o x  use p = |1 0 1| and |0 1 0|
+%                  x x x x          |0 0 0|     |1 0 1|
+%                  o x o x          |1 0 1|     |0 1 0|
+%
+% (2) 2x2 shifted: o x o x  use p = |0 1 0| and |1 1 1|
+%                  x x x x          |0 0 0|     |0 0 0|
+%                  x o x o          |1 0 1|     |1 1 1|
+%                                   |0 0 0|
+%                                   |0 1 0|
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
 % -mask is binary array [nx ny nz] or [ny nz]
-% -varargin: pairs of options/values (e.g. 'tol',1)
+% -varargin: pairs of options/values (e.g. 'pattern',2)
 %
 % Output:
 % -ksp is reconstructed kspace [nx ny nz nc] for each coil
 %
 % Comments:
-% -automatic detection of speedup factor and acs lines 
-% -best with center of kspace at center of the array
-% -use uniform outer line spacing and fully sampled acs
+% - works best with center of kspace at center of the array
+%   because we lack a built-in circular convolution. To do:
+%   implement cconvn (based on circshift?). Bonus if it can
+%   ignore zeros in the convolution kernel (~2x speed up).
 %
 %% example dataset
 
@@ -24,21 +35,21 @@ if nargin==0
     disp('Running example...')
     load phantom3D_6coil.mat
     data = fftshift(data);
-    mask = false(121,96); % sampling mask
-    mask(1:2:end,1:2:end) = 1; % undersample
-    varargin{1} = 'cal';
-    varargin{2} = data(:,50:70,40:60,:); % separate calibration
+    mask = zeros(121,96); % sampling mask
+    mask(1:2:end,1:2:end) = 1; % undersample 2x2
+    mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
+    varargin{1} = 'pattern';
+    varargin{2} = 2;
+    varargin{3} = 'cal';
+    varargin{4} = data(:,50:70,40:60,:); % separate calibration
 end
 
 %% options
 
 opts.idx = -2:2; % readout convolution pattern
-opts.cal = []; % separate calibration data, if available
+opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
-
-% ky-kz convolution patterns
-opts.p{1} = [1 0 1; 0 0 0; 1 0 1]; % diagonal
-opts.p{2} = [0 1 0; 1 0 1; 0 1 0]; % crosses
+opts.pattern = 1; % default to regular 2x2 sampling
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -49,6 +60,19 @@ for k = 1:2:numel(varargin)
         warning('''%s'' is not a valid option.',varargin{k});
     end
     opts.(varargin{k}) = varargin{k+1};
+end
+
+%% ky-kz convolution patterns
+
+switch opts.pattern
+    case 1;
+        opts.p{1} = [1 0 1; 0 0 0; 1 0 1]; % diagonal
+        opts.p{2} = [0 1 0; 1 0 1; 0 1 0]; % crosses
+    case 2;
+        opts.p{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
+        opts.p{2} = [1 1 1; 0 0 0;1 1 1]; % rectangle
+    otherwise;
+        error('pattern not defined');
 end
 
 %% initialize
@@ -93,9 +117,6 @@ Rz = max(diff(kz));
 if Rx>1
     error('Sampling must be contiguous in kx-direction.')
 end
-if Ry~=2 || Rz~=2
-    error('Sampling Ry=%i Rz=%i not supported (only 2x2)',Ry,Rz);
-end
 if Ry*Rz>nc
     error('Speed up greater than no. coils (%i vs %i)',Ry*Rz,nc);
 end
@@ -105,7 +126,7 @@ for j = 0:numel(opts.p)
     if j==0
         yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
     else
-        s{j} = conv2(yz,opts.p{j},'same')>=nnz(opts.p{j});
+        s{j} = convn(yz,opts.p{j},'same')>=nnz(opts.p{j});
         yz(s{j}) = 1; % we now consider these lines sampled
     end
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
@@ -122,7 +143,7 @@ title('sampling'); xlabel('kz'); ylabel('ky');
 
 subplot(1,2,2); im = sum(abs(ifft3(data)),4);
 slice = ceil(nx/2); imagesc(squeeze(im(slice,:,:)));
-title(sprintf('%s (R=%ix%i)',mfilename,Ry,Rz));
+title(sprintf('%s (R=2x2)',mfilename));
 xlabel('z'); ylabel('y'); drawnow;
 
 % needs to check for adequate kspace coverage
@@ -187,7 +208,7 @@ for j = 1:numel(opts.p)
     
     % acs sampling pattern
     a = opts.p{j}; a(c{j}) = 1; % center point
-    acs{j} = find(conv2(yz,a,'same')>=nnz(a));
+    acs{j} = find(convn(yz,a,'same')>=nnz(a));
     na(j) =  numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
