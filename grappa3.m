@@ -23,25 +23,18 @@ function ksp = grappa3(data,mask,varargin)
 % Output:
 % -ksp is reconstructed kspace [nx ny nz nc] for each coil
 %
-% Comments:
-% - works best with center of kspace at center of the array
-%   because we lack a built-in circular convolution. To do:
-%   implement cconvn (based on circshift?). Bonus if it can
-%   ignore zeros in the convolution kernel (~2x speed up).
-%
 %% example dataset
 
 if nargin==0
     disp('Running example...')
     load phantom3D_6coil.mat
-    data = fftshift(data);
-    mask = zeros(121,96); % sampling mask
+    data = fftshift(data); % center kspace
+    data(:,end,:,:) = []; % remove weird odd dimension
+    mask = zeros(size(data,2),size(data,3));
     mask(1:2:end,1:2:end) = 1; % undersample 2x2
     mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
-    varargin{1} = 'pattern';
-    varargin{2} = 2;
-    varargin{3} = 'cal';
-    varargin{4} = data(:,50:70,40:60,:); % separate calibration
+    varargin{1} = 'pattern'; varargin{2} = 2;
+    varargin{3} = 'cal'; varargin{4} = data(21:110,51:70,41:60,:); % separate calibration
 end
 
 %% options
@@ -50,6 +43,11 @@ opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % default to regular 2x2 sampling
+
+% circular convolution fills kspace all the way to the
+% edges so kspace doesn't need to be centered. however
+% it is slow. really need a built-in circular convn.
+opts.conv = 'circular';
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -75,6 +73,11 @@ switch opts.pattern
         error('pattern not defined');
 end
 
+% make sure it's logical
+for k = 1:numel(opts.p)
+    opts.p{k} = logical(opts.p{k});
+end
+
 %% initialize
 
 % argument checks
@@ -83,6 +86,10 @@ if ndims(data)<3 || ndims(data)>4
 end
 [nx ny nz nc] = size(data);
 
+% better to use even numbers (for circular convolution)
+if mod(nx,2) || mod(ny,2) || mod(nz,2)
+    warning('better to use even array sizes ([%i %i %i])',nx,ny,nz);
+end
 if ~exist('mask','var') || isempty(mask)
     mask = any(data,4); % 3d mask [nx ny nz]
     warning('Argument ''mask'' not supplied - guessing.')
@@ -101,33 +108,36 @@ mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
 % non-sampled points must be zero
 data = bsxfun(@times,data,mask);
 
+% define the convolution function
+if isequal(opts.conv,'circular') && exist('cconvn.m','file')
+    grappaconv = @(A,B)cconvn(A,B);
+else
+    grappaconv = @(A,B)convn(A,B,'same'); % no 'circ' option
+end
+
 %% detect sampling
+
+% speedup factor
+R = numel(mask)/nnz(mask);
 
 % indices of sampled points
 kx = find(any(any(mask,2),3));
-ky = find(any(any(mask,1),3));
-kz = find(any(any(mask,1),2));
-
-% max speed up in each direction
-Rx = max(diff(kx));
-Ry = max(diff(ky));
-Rz = max(diff(kz));
 
 % basic checks
-if Rx>1
+if max(diff(kx))>1
     error('Sampling must be contiguous in kx-direction.')
 end
-if Ry*Rz>nc
-    error('Speed up greater than no. coils (%i vs %i)',Ry*Rz,nc);
+if R>nc
+    warning('Speed up greater than no. coils (%.1f vs %i)',R,nc);
 end
 
-% phase encode sampling pattern after each pass of recontruction
+% sampling pattern after each pass of reconstruction
 for j = 0:numel(opts.p)
     if j==0
         yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
     else
-        s{j} = convn(yz,opts.p{j},'same')>=nnz(opts.p{j});
-        yz(s{j}) = 1; % we now consider these lines sampled
+        s{j} = grappaconv(yz,opts.p{j})>=nnz(opts.p{j});
+        yz(s{j}) = 1; % we can now consider these lines sampled
     end
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
 end
@@ -135,34 +145,31 @@ end
 % display
 fprintf('Data size = %s\n',sprintf('%i ',size(data)));
 fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
-fprintf('Sampling in ky-kz = %ix%i\n',Ry,Rz);
 disp(opts);
 
-subplot(1,2,1); imagesc(yz+reshape(any(mask),ny,nz));
+subplot(1,2,1); imagesc(yz+reshape(any(mask),ny,nz),[0 2]);
 title('sampling'); xlabel('kz'); ylabel('ky'); 
 
 subplot(1,2,2); im = sum(abs(ifft3(data)),4);
 slice = ceil(nx/2); imagesc(squeeze(im(slice,:,:)));
-title(sprintf('%s (R=2x2)',mfilename));
+title(sprintf('%s (R=%.1f)',mfilename,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 % needs to check for adequate kspace coverage
-if nnz(yz)/(ny*nz) < 0.9
-    error('Inadequate coverage - check sampling patterns.')
+if nnz(yz)/numel(yz) < 0.9
+    error('inadequate coverage - check sampling patterns')
 end
 
 %% see if gpu is possible
 
 try
     gpu = gpuDevice;
-    if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b'); end
     data = gpuArray(data);
     mask = gpuArray(mask);
     fprintf('GPU found = %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
 catch ME
     data = gather(data);
     mask = gather(mask);
-    warning('%s. Using CPU.', ME.message);
 end
 
 %% GRAPPA acs
@@ -205,10 +212,11 @@ for j = 1:numel(opts.p)
     
     % center point of the convolution
     c{j} = ceil(size(opts.p{j})/2);
+    ind = sub2ind(size(opts.p{j}),c{j}(1),c{j}(2));
     
     % acs sampling pattern
-    a = opts.p{j}; a(c{j}) = 1; % center point
-    acs{j} = find(convn(yz,a,'same')>=nnz(a));
+    a = opts.p{j}; a(ind) = 1; % center point
+    acs{j} = find(grappaconv(yz,a)>=nnz(a));
     na(j) =  numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
@@ -249,8 +257,10 @@ for j = 1:numel(opts.p)
     % convolution matrix
     for k = 1:na(j)
 
-        % neighbors in ky and kz as indices (idy)
-        idy = sub2ind(size(yz),y(k)-dy,z(k)-dz);
+        % neighbors in ky and kz as indices
+        wrapy = mod(y(k)-dy+size(yz,1)-1,size(yz,1))+1;
+        wrapz = mod(z(k)-dz+size(yz,2)-1,size(yz,2))+1;
+        idy = sub2ind(size(yz),wrapy,wrapz);
         
         for m = 1:numel(opts.idx)
             A(:,k,m,:,:) = cal(valid-opts.idx(m),idy,:);
@@ -302,10 +312,10 @@ for j = 1:numel(opts.p)
         ksp_coil_m = ksp(:,:,:,m);
         
         for k = 1:nc
-            tmp = convn(data(:,:,:,k),Y{j}(:,:,:,k,m),'same');
+            tmp = grappaconv(data(:,:,:,k),Y{j}(:,:,:,k,m));
             ksp_coil_m(:,s{j}) = ksp_coil_m(:,s{j})+tmp(:,s{j});
         end
-        
+
         ksp(:,:,:,m) = ksp_coil_m;
         
     end
@@ -320,7 +330,7 @@ fprintf('GRAPPA reconstruction: '); toc;
 
 subplot(1,2,2); im = sum(abs(ifft3(data)),4);
 imagesc(squeeze(im(slice,:,:)));
-title(sprintf('%s (R=%ix%i)',mfilename,Ry,Rz));
+title(sprintf('%s (R=%.1f)',mfilename,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 if nargout==0; clear; end % avoid dumping to screen
