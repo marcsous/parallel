@@ -25,10 +25,10 @@ if nargin==0
     disp('Running example...')
     load phantom3D_6coil.mat
     data = fftshift(data);
-    mask = false(128,121,96); % sampling mask
+    data(:,end,:,:) = []; % remove odd dimension
+    mask = false(128,120,96); % sampling mask
     mask(:,1:2:end,1:2:end) = 1; % undersample
-    varargin{1} = 'cal';
-    varargin{2} = data(:,50:70,40:60,:); % separate calibration
+    varargin{1} = 'cal'; varargin{2} = data(:,51:70,41:60,:); % separate calibration
     data = bsxfun(@times,data,mask); % clean up data
 end
 
@@ -331,13 +331,14 @@ hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
 line(xlim,gather([1 1]*sigma/W(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
-% show current kspace
-subplot(1,4,2); slice = ceil(size(ksp,1)/2);
-tmp = squeeze(log(sum(abs(ksp(slice,:,:,:)),4)));
+% show current kspace (center of kx)
+subplot(1,4,2);
+tmp = squeeze(log(sum(abs(ksp(opts.center(1),:,:,:)),4)));
 imagesc(tmp); xlabel('kz'); ylabel('ky'); title('kspace');
 
-% show current image
-subplot(1,4,3); tmp = ifft(ksp); tmp = squeeze(tmp(slice,:,:,:));
+% show current image (center of x)
+subplot(1,4,3); slice = ceil(size(ksp,1)/2);
+tmp = ifft(ksp); tmp = squeeze(tmp(slice,:,:,:));
 imagesc(sum(abs(ifft2(tmp)),3)); xlabel('z'); ylabel('y');
 title(sprintf('iter %i',iter));
 
