@@ -2,8 +2,8 @@ function [image phase] = homodyne(kspace,dim,index,method,window)
 %[image phase] = homodyne(kspace,dim,index,method,window)
 %
 % Partial Fourier reconstruction for 2D or 3D datasets.
-% Leave kspace zeroed and the code will figure out dim
-% and index automatically.
+% Leave kspace zeroed where unsampled and the code will
+% figure out dim and index automatically.
 %
 % In this code we obey the laws of physics (1 dim only).
 %
@@ -13,8 +13,8 @@ function [image phase] = homodyne(kspace,dim,index,method,window)
 % Optional inputs:
 % -dim is the dimension to operate over [auto]
 % -index is a vector of sampled points [auto]
-% -method ('homodyne' or 'pocs') ['homodyne']
-% -window filter ('ramp' or 'step') ['ramp']
+% -method ('homodyne','pocs') ['homodyne']
+% -window ('step','ramp','quad','cube') ['cube']
 
 [nx ny nz ne] = size(kspace);
 
@@ -32,13 +32,19 @@ if any(diff(kx)~=1) || any(diff(ky)~=1) || any(diff(kz)~=1)
     error('kspace not centered or not contiguous');
 end
 
+% fraction of sampling in kx, ky, kz
+f = [numel(kx)/nx numel(ky)/ny numel(kz)/nz];
+
+threshold = 0.98;
+if all(f>threshold)
+    error('kspace is fully sampled - no need for homodyne');
+end
+
 if ~exist('dim','var') || isempty(dim)
-    allowance = 1; % allow for the occasional true zero
-    if numel(kx)<nx-allowance; dim(1) = 1; end
-    if numel(ky)<ny-allowance; dim(2) = 1; end
-    if numel(kz)<nz-allowance; dim(3) = 1; end
-    if sum(dim)~=1; error('more than 1 partial dimension'); end
-    dim = find(dim);
+    [~,dim] = min(f);
+    if sum(f<threshold) > 1
+        warning('more than 1 partial dimension: [%s]. Using dim %i.',num2str(f,'%.2f '),dim);
+    end
 end
 
 if ~exist('index','var') || isempty(index)
@@ -62,12 +68,25 @@ if dim==3; H = zeros(1,1,nz); end
 H(index) = 1;
 
 % high pass filter
-H = H + flip(1-H); % step
+H = H + flip(1-H);
 
-if isequal(window,'ramp')
-    tmp = find(H==1);
-    tmp = [tmp(1)-1;tmp(:);tmp(end)+1];
-    H(tmp) = linspace(H(tmp(1)),H(tmp(end)),numel(tmp));
+center = find(H==1); % symmetric center of kspace
+center = [center(1)-1;center(:);center(end)+1]; % pad by 1 point
+ramp = linspace(H(center(1)),H(center(end)),numel(center)); % ramp
+
+switch window
+    case 'step'
+        H(center) = 1;
+    case {'linear','ramp'}
+        H(center) = ramp;
+    case {'quadratic','quad'}
+        H(center) = (ramp-1).^2.*sign(ramp-1)+1;
+    case {'cubic','cube'}
+        H(center) = (ramp-1).^3+1;
+    case {'quartic'}
+        H(center) = (ramp-1).^4.*sign(ramp-1)+1;    
+    otherwise
+        error('window not recognized');
 end
 
 % low pass filter
