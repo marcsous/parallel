@@ -58,7 +58,7 @@ if ~exist('method','var') || isempty(method)
     method = 'homodyne';
 end
 if ~exist('window','var') || isempty(window)
-    window = 'ramp';
+    window = 'cube';
 end
 
 % set up low/high pass filters
@@ -72,7 +72,7 @@ H = H + flip(1-H);
 
 center = find(H==1); % symmetric center of kspace
 center = [center(1)-1;center(:);center(end)+1]; % pad by 1 point
-ramp = linspace(H(center(1)),H(center(end)),numel(center)); % ramp
+ramp = linspace(H(center(1)),H(center(end)),numel(center)); % symmetric points add to 2
 
 switch window
     case 'step'
