@@ -43,6 +43,7 @@ opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % default to regular 2x2 sampling
+opts.readout = 1; % readout dimension (default 1)
 
 % circular convolution fills kspace all the way to the
 % edges so kspace doesn't need to be centered. however
@@ -83,6 +84,15 @@ end
 % argument checks
 if ndims(data)<3 || ndims(data)>4
     error('Argument ''data'' must be a 4d array.')
+end
+
+% switch readout direction
+if opts.readout==2
+    data = permute(data,[2 1 3 4]);
+    if exist('mask','var'); mask = permute(mask,[2 1 3 4]); end
+elseif opts.readout==3
+    data = permute(data,[3 2 1 4]);
+    if exist('mask','var'); mask = permute(mask,[3 2 1 4]); end
 end
 [nx ny nz nc] = size(data);
 
@@ -325,6 +335,13 @@ for j = 1:numel(opts.p)
 end
 
 fprintf('GRAPPA reconstruction: '); toc;
+
+% unswitch readout direction
+if opts.readout==2
+    data = permute(data,[2 1 3 4]);
+elseif opts.readout==3
+    data = permute(data,[3 2 1 4]);
+end
 
 %% display
 

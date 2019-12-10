@@ -1,9 +1,9 @@
-function [image phase] = homodyne(kspace,dim,index,method,window)
-%[image phase] = homodyne(kspace,dim,index,method,window)
+function [image phase] = homodyne(kspace,method,window)
+%[image phase] = homodyne(kspace,method,window)
 %
 % Partial Fourier reconstruction for 2D or 3D datasets.
-% Leave kspace zeroed where unsampled and the code will
-% figure out dim and index automatically.
+% Leave kspace zeroed where unsampled so the code can
+% figure out the sampling automatically.
 %
 % In this code we obey the laws of physics (1 dim only).
 %
@@ -11,8 +11,6 @@ function [image phase] = homodyne(kspace,dim,index,method,window)
 % -kspace is partially filled kspace data (2D or 3D)
 %
 % Optional inputs:
-% -dim is the dimension to operate over [auto]
-% -index is a vector of sampled points [auto]
 % -method ('homodyne','pocs') ['homodyne']
 % -window ('step','ramp','quad','cube') ['cube']
 
@@ -22,7 +20,7 @@ if ne~=1 || nx==1 || ny==1
     error('only 2D or 3D kspace allowed');
 end
 
-% detect dim and index
+% detect sampling
 mask = (kspace~=0);
 kx = find(any(any(mask,2),3));
 ky = find(any(any(mask,1),3));
@@ -33,27 +31,20 @@ if any(diff(kx)~=1) || any(diff(ky)~=1) || any(diff(kz)~=1)
 end
 
 % fraction of sampling in kx, ky, kz
-f = [numel(kx)/nx numel(ky)/ny numel(kz)/nz];
+f = [numel(kx)/nx numel(ky)/ny];
+if nz>1; f(3) = numel(kz)/nz; end
 
+% some checks
 threshold = 0.98;
+
+[~,dim] = min(f);
+fprintf('partial sampling: [%s]. Using dimension %i.\n',num2str(f,'%.2f '),dim);
+
 if all(f>threshold)
     error('kspace is fully sampled - no need for homodyne');
 end
 
-if ~exist('dim','var') || isempty(dim)
-    [~,dim] = min(f);
-    if sum(f<threshold) > 1
-        warning('more than 1 partial dimension: [%s]. Using dim %i.',num2str(f,'%.2f '),dim);
-    end
-end
-
-if ~exist('index','var') || isempty(index)
-    if dim==1; index = kx; end
-    if dim==2; index = ky; end        
-    if dim==3; index = kz; end
-end
-
-% default choices
+% set default choices
 if ~exist('method','var') || isempty(method)
     method = 'homodyne';
 end
@@ -61,10 +52,10 @@ if ~exist('window','var') || isempty(window)
     window = 'cube';
 end
 
-% set up low/high pass filters
-if dim==1; H = zeros(nx,1,1); end
-if dim==2; H = zeros(1,ny,1); end
-if dim==3; H = zeros(1,1,nz); end
+% set up filters
+if dim==1; H = zeros(nx,1,1); index = kx; end
+if dim==2; H = zeros(1,ny,1); index = ky; end
+if dim==3; H = zeros(1,1,nz); index = kz; end
 H(index) = 1;
 
 % high pass filter
@@ -94,14 +85,19 @@ L = sqrt(max(0,1-(H-1).^2));
 
 % low resolution phase
 phase = bsxfun(@times,L,kspace);
-phase = angle(ifftn(phase));
+if false
+    % smoothing in the other in-plane dimension (no clear benefit)
+    if dim~=1; phase = bsxfun(@times,phase,sin(linspace(0,pi,nx)')); end
+    if dim~=2; phase = bsxfun(@times,phase,sin(linspace(0,pi,ny) )); end
+end
+phase = angle(ifftn(ifftshift(phase)));
 
 % reconstruction
 switch(method)
     
     case 'homodyne';
         image = bsxfun(@times,H,kspace);
-        image = ifftn(image).*exp(-i*phase);
+        image = ifftn(ifftshift(image)).*exp(-i*phase);
         image = abs(real(image));
         
     case 'pocs';
@@ -114,7 +110,7 @@ switch(method)
             tmp = image.*exp(i*phase);
             
             % data consistency
-            tmp = fftn(tmp);
+            tmp = fftshift(fftn(tmp));
             tmp(mask) = kspace(mask);
             
         end
@@ -124,4 +120,6 @@ switch(method)
 
 end
 
-
+% twix data are always fftshifted
+image = fftshift(image);
+phase = fftshift(phase);

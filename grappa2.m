@@ -21,7 +21,7 @@ if nargin==0
     disp('Running example...')
     load phantom
     data = fftshift(fft2(data));
-    mask = 1:3:256;
+    mask = 1:2:256;
     varargin{1} = 'cal';
     varargin{2} = data(90:160,120:140,:);
 end
@@ -32,6 +32,7 @@ opts.idx = -2:2; % neighborhood to use in readout (kx)
 opts.width = 2; % no. neighbors to use in phase (ky)
 opts.cal = []; % separate calibration data, if available
 opts.tol = []; % svd tolerance for calibration
+opts.readout = 1; % readout dimension (default=1)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -49,6 +50,12 @@ end
 % argument checks
 if ndims(data)<2 || ndims(data)>3
     error('Argument ''data'' must be a 3d array.')
+end
+
+% switch readout direction
+if opts.readout==2
+    data = permute(data,[2 1 3]);
+    if exist('mask','var'); mask = permute(mask,[2 1 3]); end
 end
 [nx ny nc] = size(data);
 
@@ -77,7 +84,7 @@ for R = 1:nc+1
     eq = pe(1):R:pe(end); % equal spaced
     if all(ismember(eq,pe)); break; end
 end
-if R>nc; error('Sampling pattern in ky not supported.'); end
+if R>nc; warning('Sampling pattern in ky not supported.'); end
 
 % indices of sampled readout points
 ro = find(any(mask,2));
@@ -88,7 +95,7 @@ if any(diff(ro)>1)
 end
 
 % display
-fprintf('Line spacing R = %i\n',R);
+fprintf('Line spacing R = %i (speedup %.1f)\n',R,ny/numel(pe));
 fprintf('Phase encodes = %i (out of %i)\n',numel(pe),ny);
 fprintf('Readout points = %i (out of %i)\n',numel(ro),nx);
 fprintf('Number of coils = %i\n',nc);
@@ -210,13 +217,26 @@ end
 ksp(ro,pe,:) = data(ro,pe,:);
 
 %% handle partial Fourier sampling
-% not implemented: options - homodyne or conjugate coils
 
 if pe(1)>R || pe(end)<ny-R
-    warning('partial ky data detected (range %i-%i).',pe([1 end]));
+    if pe(1)>R
+        ksp(:,1:pe(1)-1,:) = 0;
+    else
+        ksp(:,pe(end)+1:end,:) = 0;
+    end
+    warning('partial ky detected (range %i-%i).',pe(1),pe(end));
 end
 if ro(1)>R || ro(end)<nx-R
-    warning('partial kx data detected (range %i-%i).',ro([1 end]));
+    if ro(1)>R
+        ksp(1:ro(1)-1,:,:) = 0;
+    else
+        ksp(ro(end)+1:end,:,:) = 0;
+    end
+    warning('partial kx detected (range %i-%i).',ro(1),ro(end));
+end
+
+if opts.readout==2
+    ksp = permute(ksp,[2 1 3]);
 end
 
 %% display
