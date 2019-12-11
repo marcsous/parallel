@@ -32,7 +32,8 @@ switch nd
     case 2; [S(1,:) S(2,:)] = ind2sub(sz,i);
     case 3; [S(1,:) S(2,:) S(3,:)] = ind2sub(sz,i);
     case 4; [S(1,:) S(2,:) S(3,:) S(4,:)] = ind2sub(sz,i);
-    otherwise; error('high dim not implemented - fix me');
+    case 5; [S(1,:) S(2,:) S(3,:) S(4,:) S(5,:)] = ind2sub(sz,i);      
+    otherwise; error('high dimensions not implemented - fix me');
 end
 
 % center the convolution indices
