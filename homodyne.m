@@ -8,19 +8,19 @@ function [image phase] = homodyne(kspace,method,window)
 % In this code we obey the laws of physics (1 dim only).
 %
 % Inputs:
-% -kspace is partially filled kspace data (2D or 3D)
+% -kspace is partially filled kspace (2D or 3D) single coil
 %
 % Optional inputs:
-% -method ('homodyne','pocs') ['homodyne']
-% -window ('step','ramp','quad','cube') ['cube']
+% -method ('homodyne','pocs','least-squares') ['homodyne']
+% -window ('step','ramp','quad','cube','quartic') ['cube']
 
-[nx ny nz ne] = size(kspace);
+[nx ny nz nc] = size(kspace);
 
-if ne~=1 || nx==1 || ny==1
+if nc~=1 || nx==1 || ny==1
     error('only 2D or 3D kspace allowed');
 end
 
-% detect sampling
+%% detect sampling
 mask = (kspace~=0);
 kx = find(any(any(mask,2),3));
 ky = find(any(any(mask,1),3));
@@ -52,7 +52,7 @@ if ~exist('window','var') || isempty(window)
     window = 'cube';
 end
 
-% set up filters
+%% set up filters
 if dim==1; H = zeros(nx,1,1); index = kx; end
 if dim==2; H = zeros(1,ny,1); index = ky; end
 if dim==3; H = zeros(1,1,nz); index = kz; end
@@ -92,18 +92,23 @@ if false
 end
 phase = angle(ifftn(ifftshift(phase)));
 
-% reconstruction
+%% reconstruction
+
+maxit = 10; % no. of iterations to use for iterative methods
+
 switch(method)
     
     case 'homodyne';
+        
         image = bsxfun(@times,H,kspace);
         image = ifftn(ifftshift(image)).*exp(-i*phase);
-        image = abs(real(image));
+        image = real(image);
         
     case 'pocs';
+        
         tmp = kspace;
         
-        for iter = 1:10
+        for iter = 1:maxit
             
             % abs and low res phase
             image = abs(ifftn(tmp));
@@ -115,6 +120,14 @@ switch(method)
             
         end
         
+    case 'least-squares';
+
+        % penalized least squares requires pcgpc.m
+        lambda = 1e-2; damp = 1e-4; % exact values not important
+        b = reshape(exp(-i*phase).*ifftn(ifftshift(kspace)),[],1);
+        tmp = pcgpc(@(x)pcpop(x,mask,phase,lambda,damp),b,[],maxit);
+        image = real(reshape(tmp,size(phase)));
+
     otherwise;
         error('unknown method ''%s''',method);
 
@@ -123,3 +136,15 @@ end
 % twix data are always fftshifted
 image = fftshift(image);
 phase = fftshift(phase);
+
+%% phase constrained projection operator (image <- image)
+function y = pcpop(x,mask,phase,lambda,damp)
+% y = P' * F' * W * F * P * x + i * imag(x) + damp * x
+x = reshape(x,size(phase));
+y = exp(i*phase).*x;
+y = fftn(y);
+y = fftshift(mask).*y;
+y = ifftn(y);
+y = exp(-i*phase).*y;
+y = y + lambda*i*imag(x) + damp*x;
+y = reshape(y,[],1);
