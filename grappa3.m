@@ -2,19 +2,33 @@ function ksp = grappa3(data,mask,varargin)
 %
 % Implementation of GRAPPA for 3D images (yz-direction).
 %
-% Configured for 2x2 sampling but may be modified for
-% others by setting up the convolution patterns (opts.p).
-% E.g. two patterns that are pre-configured
+% Configured for 2x or 2x2 sampling but may be modified
+% by setting up the convolution patterns. The following
+% patterns are pre-configured:
 %
-% (1) 2x2 regular: o x o x  use p = |1 0 1| and |0 1 0|
-%                  x x x x          |0 0 0|     |1 0 1|
-%                  o x o x          |1 0 1|     |0 1 0|
+% (1) 2x2 regular: x o x o  opts.p = |1 0 1| and |0 1 0|
+%                  o o o o           |0 0 0|     |1 0 1|
+%                  x o x o           |1 0 1|     |0 1 0|
+%                  o o o o
 %
-% (2) 2x2 shifted: o x o x  use p = |0 1 0| and |1 1 1|
-%                  x x x x          |0 0 0|     |0 0 0|
-%                  x o x o          |1 0 1|     |1 1 1|
-%                                   |0 0 0|
-%                                   |0 1 0|
+% (2) 2x2 shifted: x o x o  opts.p = |0 1 0| and |1 1 1|
+%                  o o o o           |0 0 0|     |0 0 0|
+%                  o x o x           |1 0 1|     |1 1 1|
+%                  o o o o           |0 0 0|
+%                                    |0 1 0|
+%
+% (3) 2x1 regular: x x x x  opts.p = |1 1 1|
+%                  o o o o           |0 0 0|
+%                  x x x x           |1 1 1|
+%                  o o o o
+%
+% (4) 1x2 regular: x o x o  opts.p = |1 0 1|
+%                  x o x o           |1 0 1|
+%                  x o x o           |1 0 1|
+%                  x o x o
+%
+% Otherwise patterns may be passed by cell array (see below).
+%
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
 % -mask is binary array [nx ny nz] or [ny nz]
@@ -42,13 +56,13 @@ end
 opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
-opts.pattern = 1; % default to regular 2x2 sampling
-opts.readout = 1; % readout dimension (default 1)
+opts.pattern = 1; % scalar 1-4 or cell array (see below)
+opts.readout = 1; % readout dimension (1, 2 or 3)
 
 % circular convolution fills kspace all the way to the
 % edges so kspace doesn't need to be centered. however
-% it is slow. really need a built-in circular convn.
-opts.conv = 'circular';
+% it is slow. need a built-in 'circ' convn option.
+opts.conv = 'same'; % 'same' or 'circ'
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -63,19 +77,31 @@ end
 
 %% ky-kz convolution patterns
 
-switch opts.pattern
-    case 1;
-        opts.p{1} = [1 0 1; 0 0 0; 1 0 1]; % diagonal
-        opts.p{2} = [0 1 0; 1 0 1; 0 1 0]; % crosses
-    case 2;
-        opts.p{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
-        opts.p{2} = [1 1 1; 0 0 0;1 1 1]; % rectangle
-    otherwise;
-        error('pattern not defined');
+if isa(opts.pattern,'cell')
+    opts.p = opts.pattern; % no error checks
+    opts.pattern = 0; % user defined pattern
+else
+    switch opts.pattern
+        case 1;
+            opts.p{1} = [1 0 1;0 0 0;1 0 1]; % diagonal
+            opts.p{2} = [0 1 0;1 0 1;0 1 0]; % crosses
+        case 2;
+            opts.p{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
+            opts.p{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
+        case 3;
+            opts.p{1} = [1 1 1 1 1;0 0 0 0 0;1 1 1 1 1]; % y only
+        case 4;
+            opts.p{1} = [1 0 1;1 0 1;1 0 1;1 0 1;1 0 1]; % z only
+        otherwise;
+            error('pattern not recognized');
+    end
 end
 
-% make sure it's logical
+% make logical - catch any bad user defined patterns
 for k = 1:numel(opts.p)
+    if ~isnumeric(opts.p{k}) || ~ismatrix(opts.p{k})
+        error('pattern %k must be numeric matrix',k);
+    end
     opts.p{k} = logical(opts.p{k});
 end
 
@@ -93,6 +119,8 @@ if opts.readout==2
 elseif opts.readout==3
     data = permute(data,[3 2 1 4]);
     if exist('mask','var'); mask = permute(mask,[3 2 1 4]); end
+elseif opts.readout~=1
+    error('readout dimension must be 1, 2 or 3');
 end
 [nx ny nz nc] = size(data);
 
@@ -102,7 +130,7 @@ if mod(nx,2) || mod(ny,2) || mod(nz,2)
 end
 if ~exist('mask','var') || isempty(mask)
     mask = any(data,4); % 3d mask [nx ny nz]
-    warning('Argument ''mask'' not supplied - guessing.')
+    disp('Argument ''mask'' not supplied - guessing.')
 else
     if nnz(mask~=0 & mask~=1)
         error('Argument ''mask'' type must be logical.')
@@ -119,10 +147,12 @@ mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
 data = bsxfun(@times,data,mask);
 
 % define the convolution function
-if isequal(opts.conv,'circular') && exist('cconvn.m','file')
+if isequal(opts.conv,'circ') && exist('cconvn.m','file')
     grappaconv = @(A,B)cconvn(A,B);
-else
+elseif isequal(opts.conv,'same')
     grappaconv = @(A,B)convn(A,B,'same'); % no 'circ' option
+else
+    error('convolution options are: ''circ'' or ''same''');
 end
 
 %% detect sampling
@@ -157,17 +187,18 @@ fprintf('Data size = %s\n',sprintf('%i ',size(data)));
 fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
 disp(opts);
 
-subplot(1,2,1); imagesc(yz+reshape(any(mask),ny,nz),[0 2]);
-title('sampling'); xlabel('kz'); ylabel('ky'); 
+subplot(1,3,1); imagesc(yz+reshape(any(mask),ny,nz),[0 2]);
+title(sprintf('%s (pattern=%i)',mfilename,opts.pattern));
+xlabel('kz'); ylabel('ky'); 
 
-subplot(1,2,2); im = sum(abs(ifft3(data)),4);
-slice = ceil(nx/2); imagesc(squeeze(im(slice,:,:)));
-title(sprintf('%s (R=%.1f)',mfilename,R));
+subplot(1,3,2); im = sum(abs(ifft3(data)),4);
+[~,slice] = max(sum(reshape(im,[],nz))); % pick a slice with signal
+imagesc(squeeze(im(slice,:,:))); title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 % needs to check for adequate kspace coverage
 if nnz(yz)/numel(yz) < 0.9
-    error('inadequate coverage - check sampling patterns')
+    warning('inadequate coverage - check sampling patterns.')
 end
 
 %% see if gpu is possible
@@ -224,9 +255,9 @@ for j = 1:numel(opts.p)
     c{j} = ceil(size(opts.p{j})/2);
     ind = sub2ind(size(opts.p{j}),c{j}(1),c{j}(2));
     
-    % acs sampling pattern
-    a = opts.p{j}; a(ind) = 1; % center point
-    acs{j} = find(grappaconv(yz,a)>=nnz(a));
+    % find patterns that satisfy acs sampling
+    a = opts.p{j}; a(ind) = 1; % center point (i.e. target)
+    acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, don't wrap
     na(j) =  numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
@@ -239,12 +270,12 @@ for j = 1:numel(opts.p)
         error('Not enough ACS lines (%i)',na(j));
     end
 
-    % exclude acs lines from reconstruction
+    % exclude ACS lines from reconstruction
     if isempty(opts.cal); s{j}(acs{j}) = 0; end
     
 end
 
-%% GRAPPA calibration
+%% GRAPPA calibration: linear equation AX=B
 tic;
 
 % concatenate ky-kz to use indices (easier!)
@@ -284,14 +315,13 @@ for j = 1:numel(opts.p)
     A = reshape(A,size(B,1),[]);
 
     % linear solution X = pinv(A)*B
-    [V S] = svd(A'*A);
-    S = sqrt(diag(S));
+    [V S] = svd(A'*A); S = diag(S);
     if isempty(opts.tol)
         tol = max(size(A))*eps(S(1)); % pinv default
     else
         tol = opts.tol;
     end
-    invS = S./(S.^2+tol^2); % tikhonov
+    invS = sqrt(S)./(S+tol); % tikhonov
     X = V*(invS.^2.*(V'*(A'*B)));
     clear A B V % reduce memory for next loop
 
@@ -338,16 +368,16 @@ fprintf('GRAPPA reconstruction: '); toc;
 
 % unswitch readout direction
 if opts.readout==2
-    data = permute(data,[2 1 3 4]);
+    ksp = permute(ksp,[2 1 3 4]);
 elseif opts.readout==3
-    data = permute(data,[3 2 1 4]);
+    ksp = permute(ksp,[3 2 1 4]);
 end
 
 %% display
 
-subplot(1,2,2); im = sum(abs(ifft3(data)),4);
+subplot(1,3,3); im = sum(abs(ifft3(ksp)),4);
 imagesc(squeeze(im(slice,:,:)));
-title(sprintf('%s (R=%.1f)',mfilename,R));
+title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 if nargout==0; clear; end % avoid dumping to screen
