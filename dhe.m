@@ -14,7 +14,7 @@ function [ksp basic] = dhe(fwd,rev,varargin)
 if nargin==0
     disp('Running example...')
     load partial_echo.mat
-    varargin = {'loraks',1,'noise',1e-5};
+    varargin = {'loraks',1,'noise',5e-6};
 end
 
 %% setup
@@ -25,7 +25,7 @@ opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
-opts.noise = []; % noise std, if available
+opts.sigma = []; % noise std, if available
 opts.center = []; % center of kspace, if available
 opts.removeOS = 0; % remove 2x oversampling in kx
 
@@ -122,32 +122,31 @@ for iter = 1:opts.maxit
     % data consistency
     ksp = ksp + bsxfun(@times,data-ksp,mask);
     
-    % calibration matrix
+    % data matrix
     A = make_data_matrix(ksp,opts);
 
     % row space and singular values (squared)
     [V W] = svd(A'*A);
     W = diag(W);
 
-    % estimate noise floor (sigma)
-    if isempty(opts.noise)
+    % estimate noise std (heuristic)
+    if isempty(opts.sigma)
         hi = nnz(W > eps(numel(W)*W(1))); % skip true zeros
         for lo = 1:hi
             h = hist(W(lo:hi),sqrt(hi-lo));
             [~,k] = max(h);
             if k>1; break; end
         end
-        sigma = sqrt(median(W(lo:hi)));
-        opts.noise = sigma / sqrt(matrix_density*nx*ny);
-        fprintf('Noise std estimate: %.2e\n',opts.noise);
+        opts.sigma = sqrt(median(W(lo:hi))/matrix_density/nx/ny);
+        fprintf('Noise std estimate: %.2e\n',opts.sigma);
     end
-    sigma = opts.noise * sqrt(matrix_density*nx*ny);
+    noise_floor = opts.sigma * sqrt(matrix_density*nx*ny);
 
     % unsquare singular values
     W = sqrt(gather(W));   
     
     % minimum variance filter
-    f = max(0,1-sigma^2./W.^2);
+    f = max(0,1-noise_floor^2./W.^2);
     A = A * (V * diag(f) * V');
     
     % hankel structure (average along anti-diagonals)   
@@ -167,7 +166,7 @@ for iter = 1:opts.maxit
 
     % display progress every few iterations
     if mod(iter,10)==1 || converged
-        display(W,f,sigma,ksp,iter,norms,tol,mask,opts,converged);
+        display(W,f,noise_floor,ksp,iter,norms,tol,mask,opts,converged);
     end
     if iter==1
         t = tic();
@@ -235,12 +234,12 @@ end
 data = mean(reshape(A,nx,ny,nc,2,[]),5);
 
 %% show plots of various things
-function display(W,f,sigma,ksp,iter,norms,tol,mask,opts,converged)
+function display(W,f,noise_floor,ksp,iter,norms,tol,mask,opts,converged)
 
 % plot singular values
 subplot(2,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f))); 
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
-line(xlim,gather([1 1]*sigma/W(1)),'linestyle',':','color','black');
+line(xlim,gather([1 1]*noise_floor/W(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % plot change in metrics
