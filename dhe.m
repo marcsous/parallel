@@ -23,7 +23,7 @@ end
 opts.width = 5; % kernel width
 opts.radial = 1; % use radial kernel
 opts.loraks = 1; % conjugate symmetry
-opts.tol = 1e-7; % tolerance (fraction change in norm)
+opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.sigma = []; % noise std, if available
 opts.removeOS = 0; % remove 2x oversampling in kx
@@ -78,7 +78,9 @@ mask = any(data,3);
 if opts.delete1stpoint
     samples = any(any(mask,2),3);
     overlap = find(sum(samples,4)==2);
-    if samples(min(overlap)-1,1)
+    if numel(overlap)<=1
+        % not enough to delete
+    elseif samples(min(overlap)-1,1)
         mask(min(overlap),:,:,2) = 0;
         mask(max(overlap),:,:,1) = 0;
     else
@@ -112,7 +114,7 @@ matrix_density = nnz(mask) / numel(mask);
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',matrix_density);
 if opts.loraks
-    fprintf('Shifted fwd/rev by [%+i/%+i] pts\n',opts.center(1)-center(1,:));
+    fprintf('Shift [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
 end
 
 %% see if gpu is possible
