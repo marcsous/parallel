@@ -14,7 +14,7 @@ function [ksp basic] = dhe(fwd,rev,varargin)
 if nargin==0
     disp('Running example...')
     load partial_echo.mat
-    varargin = {'loraks',1,'noise',5e-6};
+    varargin = {'sigma',5e-6};
 end
 
 %% setup
@@ -22,12 +22,12 @@ end
 % default options
 opts.width = 5; % kernel width
 opts.radial = 1; % use radial kernel
-opts.loraks = 0; % conjugate symmetry
+opts.loraks = 1; % conjugate symmetry
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.sigma = []; % noise std, if available
-opts.center = []; % center of kspace, if available
 opts.removeOS = 0; % remove 2x oversampling in kx
+opts.delete1stpoint = 1; % delete 1st readout point
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -54,10 +54,6 @@ if ~isequal(size(fwd),size(rev))
 end
 [nx ny nc] = size(fwd);
 
-% create data and mask arrays
-data = cat(4,fwd,rev);
-mask = any(data,3);
-
 % convolution kernel indicies
 [x y] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
 if opts.radial
@@ -74,12 +70,35 @@ opts.kernel.mask = k;
 opts.dims = [nx ny nc 2 nk 1];
 if opts.loraks; opts.dims(6) = 2; end
 
+% create data and mask array
+data = cat(4,fwd,rev);
+mask = any(data,3);
+
+% delete 1st readout point (ADC "warm up")
+if opts.delete1stpoint
+    samples = any(any(mask,2),3);
+    overlap = find(sum(samples,4)==2);
+    if samples(min(overlap)-1,1)
+        mask(min(overlap),:,:,2) = 0;
+        mask(max(overlap),:,:,1) = 0;
+    else
+        mask(min(overlap),:,:,1) = 0;
+        mask(max(overlap),:,:,2) = 0;
+    end
+end
+
 % estimate center of kspace
-if isempty(opts.center)
-    [~,k] = max(reshape(abs(fwd)+abs(rev),[],nc));
-    [x y] = ind2sub([nx ny],k);
-    opts.center(1) = gather(round(median(x)));
-    opts.center(2) = gather(round(median(y)));
+[~,k] = max(reshape(abs(data),[],nc,2));
+[x y] = ind2sub([nx ny],reshape(k,nc,2));
+center = round([median(x,1);median(y,1)]); % median over coils
+opts.center = gather(round(mean(center,2))); % average of fwd/rev
+  
+% align center of kx (necessary for loraks)
+if opts.loraks
+    for k = 1:2
+        data(:,:,:,k) = circshift(data(:,:,:,k),opts.center(1)-center(1,k));
+        mask(:,:,:,k) = circshift(mask(:,:,:,k),opts.center(1)-center(1,k)); 
+    end
 end
 
 % indices for conjugate reflection about center
@@ -92,6 +111,9 @@ matrix_density = nnz(mask) / numel(mask);
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',matrix_density);
+if opts.loraks
+    fprintf('Shifted fwd/rev by [%+i/%+i] pts\n',opts.center(1)-center(1,:));
+end
 
 %% see if gpu is possible
 
@@ -111,7 +133,7 @@ end
 
 %% basic algorithm (average in place)
 
-basic = (fwd+rev)./max(sum(mask,4),1);
+basic = sum(data,4)./max(sum(mask,4),1);
 
 %% Cadzow algorithm
 
@@ -259,9 +281,13 @@ if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
 
 % show current kspace
 subplot(2,4,2); imagesc(log(sum(abs(ksp(:,:,:,1)),3)));
-xlabel('ky'); ylabel('kx'); title('kspace (fwd)');
+xlabel(num2str(size(ksp,2),'ky [%i]'));
+ylabel(num2str(size(ksp,1),'kx [%i]'));
+title('kspace (fwd)');
 subplot(2,4,6); imagesc(log(sum(abs(ksp(:,:,:,2)),3)));
-xlabel('ky'); ylabel('kx'); title('kspace (rev)');
+xlabel(num2str(size(ksp,2),'ky [%i]'));
+ylabel(num2str(size(ksp,1),'kx [%i]'));
+title('kspace (rev)');
 
 % remove oversampling
 if opts.removeOS
