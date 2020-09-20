@@ -14,7 +14,7 @@ function [ksp basic] = dhe(fwd,rev,varargin)
 if nargin==0
     disp('Running example...')
     load partial_echo.mat
-    varargin = {'sigma',5e-6};
+    varargin = {'sigma',5e-6,'loraks',1};
 end
 
 %% setup
@@ -22,12 +22,13 @@ end
 % default options
 opts.width = 5; % kernel width
 opts.radial = 1; % use radial kernel
-opts.loraks = 1; % conjugate symmetry
+opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.sigma = []; % noise std, if available
 opts.removeOS = 0; % remove 2x oversampling in kx
 opts.delete1stpoint = 1; % delete 1st readout point
+opts.readout = 1; % readout dimension (1 or 2)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -52,6 +53,12 @@ end
 if ~isequal(size(fwd),size(rev))
     error('''fwd'' and ''rev'' must be same size.')
 end
+if opts.readout==2
+    fwd = permute(fwd,[2 1 3]);
+    rev = permute(rev,[2 1 3]);  
+elseif opts.readout~=1
+    error('readout must be 1 or 2');
+end
 [nx ny nc] = size(fwd);
 
 % convolution kernel indicies
@@ -74,12 +81,15 @@ if opts.loraks; opts.dims(6) = 2; end
 data = cat(4,fwd,rev);
 mask = any(data,3);
 
+% fractional echo length
+fx = sum(any(any(mask,2),3));
+
 % delete 1st readout point (ADC "warm up")
 if opts.delete1stpoint
     samples = any(any(mask,2),3);
     overlap = find(sum(samples,4)==2);
     if numel(overlap)<=1
-        % not enough to delete
+        % not enough pts to delete
     elseif samples(min(overlap)-1,1)
         mask(min(overlap),:,:,2) = 0;
         mask(max(overlap),:,:,1) = 0;
@@ -93,8 +103,8 @@ end
 [~,k] = max(reshape(abs(data),[],nc,2));
 [x y] = ind2sub([nx ny],reshape(k,nc,2));
 center = round([median(x,1);median(y,1)]); % median over coils
-opts.center = gather(round(mean(center,2))); % average of fwd/rev
-  
+opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
+
 % align center of kx (necessary for loraks)
 if opts.loraks
     for k = 1:2
@@ -114,8 +124,9 @@ matrix_density = nnz(mask) / numel(mask);
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',matrix_density);
 if opts.loraks
-    fprintf('Shift [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
+    fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
 end
+fprintf('fwd: [%i/%i] rev: [%i/%i]\n',fx(1),nx,fx(2),nx);
 
 %% see if gpu is possible
 
@@ -209,6 +220,17 @@ if opts.removeOS
     ksp = fftshift(ifft(ksp,[],1));
     ksp = ksp(ok,:,:,:);
     ksp = fft(ifftshift(ksp),[],1);
+    
+    basic = fftshift(ifft(basic,[],1));
+    basic = basic(ok,:,:,:);
+    basic = fft(ifftshift(basic),[],1);
+end
+
+% restore original orientation
+if opts.readout==2
+    fwd = permute(fwd,[2 1 3]);
+    rev = permute(rev,[2 1 3]);
+    basic = permute(basic,[2 1 3]);
 end
 
 if nargout==0; clear; end % avoid dumping to screen
