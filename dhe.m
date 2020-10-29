@@ -1,7 +1,7 @@
 function [ksp basic] = dhe(fwd,rev,varargin)
 % [ksp basic] = dhe(fwd,rev,varargin)
 %
-% Double Half Echo Reconstruction
+% Double Half Echo Reconstruction (2D only)
 %
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
@@ -25,7 +25,7 @@ opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
-opts.sigma = []; % noise std, if available
+opts.noise = []; % noise std, if available
 opts.removeOS = 0; % remove 2x oversampling in kx
 opts.delete1stpoint = 1; % delete 1st readout point
 opts.readout = 1; % readout dimension (1 or 2)
@@ -77,12 +77,9 @@ opts.kernel.mask = k;
 opts.dims = [nx ny nc 2 nk 1];
 if opts.loraks; opts.dims(6) = 2; end
 
-% create data and mask array
+% create data and mask arrays
 data = cat(4,fwd,rev);
 mask = any(data,3);
-
-% fractional echo length
-fx = sum(any(any(mask,2),3));
 
 % delete 1st readout point (ADC "warm up")
 if opts.delete1stpoint
@@ -99,13 +96,16 @@ if opts.delete1stpoint
     end
 end
 
+% fractional echo length
+fx = sum(any(any(mask,2),3)) / nx;
+
 % estimate center of kspace
 [~,k] = max(reshape(abs(data),[],nc,2));
 [x y] = ind2sub([nx ny],reshape(k,nc,2));
 center = round([median(x,1);median(y,1)]); % median over coils
 opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
 
-% align center of kx (necessary for loraks)
+% align center of kx (helps for loraks)
 if opts.loraks
     for k = 1:2
         data(:,:,:,k) = circshift(data(:,:,:,k),opts.center(1)-center(1,k));
@@ -117,16 +117,16 @@ end
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 
-% density of data matrix
-matrix_density = nnz(mask) / numel(mask);
-
 % display
 disp(rmfield(opts,{'flip','kernel'}));
-fprintf('Density = %f\n',matrix_density);
+fprintf('Density = %f\n',nnz(mask)/numel(mask));
+fprintf('fwd: %f rev: %f\n',fx(1),fx(2));
 if opts.loraks
     fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
 end
-fprintf('fwd: [%i/%i] rev: [%i/%i]\n',fx(1),nx,fx(2),nx);
+if opts.delete1stpoint && numel(overlap)>1
+    fprintf('Deleted first point of readouts\n');
+end
 
 %% see if gpu is possible
 
@@ -134,13 +134,11 @@ try
     gpu = gpuDevice;  
     if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b.'); end
     fprintf('GPU found: %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);    
-    fwd = gpuArray(fwd);
-    rev = gpuArray(rev);
+    data = gpuArray(data);
     mask = gpuArray(mask);
 catch ME
     warning('%s Using CPU.', ME.message);    
-    fwd = gather(fwd);
-    rev = gather(rev);
+    data = gather(data);
     mask = gather(mask);
 end
 
@@ -162,23 +160,24 @@ for iter = 1:opts.maxit
 
     % row space and singular values (squared)
     [V W] = svd(A'*A);
-    W = diag(W);
+    W = gather(diag(W));
 
     % estimate noise std (heuristic)
-    if isempty(opts.sigma)
+    if isempty(opts.noise)
         hi = nnz(W > eps(numel(W)*W(1))); % skip true zeros
         for lo = 1:hi
             h = hist(W(lo:hi),sqrt(hi-lo));
             [~,k] = max(h);
             if k>1; break; end
         end
-        opts.sigma = sqrt(median(W(lo:hi))/matrix_density/nx/ny);
-        fprintf('Noise std estimate: %.2e\n',opts.sigma);
+        noise_floor = sqrt(median(W(lo:hi)));
+        opts.noise = noise_floor / sqrt(nnz(mask));
+        fprintf('Noise std estimate: %.2e\n',opts.noise);
     end
-    noise_floor = opts.sigma * sqrt(matrix_density*nx*ny);
-
+    noise_floor = opts.noise * sqrt(nnz(mask));
+    
     % unsquare singular values
-    W = sqrt(gather(W));   
+    W = sqrt(gather(W));
     
     % minimum variance filter
     f = max(0,1-noise_floor^2./W.^2);
@@ -199,16 +198,16 @@ for iter = 1:opts.maxit
     end
     converged = sum(tol<opts.tol) > 10;
 
-    % display progress every few iterations
-    if mod(iter,10)==1 || converged
+    % display progress every 1 second
+    if iter==1 || toc(t) > 1 || converged
+         if exist('t','var') && ~exist('itspersec','var')
+            itspersec = (iter-1)/toc(t);
+            fprintf('Iterations per second: %.1f\n',itspersec);
+        end       
         display(W,f,noise_floor,ksp,iter,norms,tol,mask,opts,converged);
-    end
-    if iter==1
         t = tic();
-    elseif iter==3
-        fprintf('Time per iteration: %.1f ms\n',1000*toc(t)/(iter-1));
     end
-
+    
     % finish when nothing left to do
     if converged; break; end
 
@@ -228,8 +227,7 @@ end
 
 % restore original orientation
 if opts.readout==2
-    fwd = permute(fwd,[2 1 3]);
-    rev = permute(rev,[2 1 3]);
+    ksp = permute(ksp,[2 1 3 4]);
     basic = permute(basic,[2 1 3]);
 end
 
@@ -293,7 +291,6 @@ subplot(2,4,5);
 ax = plotyy(1:iter,norms(1,:),1:iter,1./norms(2,:));
 legend('||A||_*','||A||_F^{-1}'); axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
-drawnow;
 
 % mask on iter=1 to show the blackness of kspace
 if iter==1
