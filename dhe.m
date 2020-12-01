@@ -1,7 +1,7 @@
 function [ksp basic] = dhe(fwd,rev,varargin)
 % [ksp basic] = dhe(fwd,rev,varargin)
 %
-% Double Half Echo Reconstruction (2D only)
+% Double Half Echo Reconstruction (2D only).
 %
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
@@ -9,12 +9,16 @@ function [ksp basic] = dhe(fwd,rev,varargin)
 % ksp is the reconstructed kspace for fwd/rev
 % basic is a basic non-low rank reconstruction
 %
+% Note: don't remove readout oversampling before
+% calling this function. With partial sampling the
+% standard fft+crop method is wrong (use removeOS).
+%
 %% example dataset
 
 if nargin==0
     disp('Running example...')
     load partial_echo.mat
-    varargin = {'sigma',5e-6,'loraks',1};
+    varargin = {'noise',5e-6,'loraks',1};
 end
 
 %% setup
@@ -26,9 +30,9 @@ opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.noise = []; % noise std, if available
-opts.removeOS = 0; % remove 2x oversampling in kx
-opts.delete1stpoint = 1; % delete 1st readout point
+opts.delete1st = 1; % delete 1st readout points (number)
 opts.readout = 1; % readout dimension (1 or 2)
+opts.removeOS = 0; % remove 2x readout oversampling (0=off)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -53,11 +57,17 @@ end
 if ~isequal(size(fwd),size(rev))
     error('''fwd'' and ''rev'' must be same size.')
 end
+if opts.removeOS~=0 && opts.removeOS~=1
+    error('removeOS must be 1 or 0.');
+end
 if opts.readout==2
     fwd = permute(fwd,[2 1 3]);
     rev = permute(rev,[2 1 3]);  
 elseif opts.readout~=1
-    error('readout must be 1 or 2');
+    error('readout must be 1 or 2.');
+end
+if mod(opts.delete1st,1) || opts.delete1st<0
+    error('delete1st must be a nonnegative integer.');
 end
 [nx ny nc] = size(fwd);
 
@@ -81,23 +91,33 @@ if opts.loraks; opts.dims(6) = 2; end
 data = cat(4,fwd,rev);
 mask = any(data,3);
 
-% delete 1st readout point (ADC "warm up")
-if opts.delete1stpoint
+% delete first readout points (ADC "warm up")
+if opts.delete1st
     samples = any(any(mask,2),3);
     overlap = find(sum(samples,4)==2);
     if numel(overlap)<=1
-        % not enough pts to delete
+        warning('not enough pts for delete1st (exactly 50% echos).');
+    elseif numel(overlap)==nx
+        warning('fully sampled - cannot detect which is 1st & last.');
     elseif samples(min(overlap)-1,1)
-        mask(min(overlap),:,:,2) = 0;
-        mask(max(overlap),:,:,1) = 0;
+        for k = 0:opts.delete1st-1
+            mask(min(overlap)+k,:,:,2) = 0;
+            mask(max(overlap)-k,:,:,1) = 0;
+        end
     else
-        mask(min(overlap),:,:,1) = 0;
-        mask(max(overlap),:,:,2) = 0;
+        for k = 0:opts.delete1st-1
+            mask(min(overlap)+k,:,:,1) = 0;
+            mask(max(overlap)-k,:,:,2) = 0;
+        end
     end
 end
 
-% fractional echo length
-fx = sum(any(any(mask,2),3)) / nx;
+% echo fraction along x
+samples = any(any(mask,2),3);
+fx = squeeze(sum(samples)) / nx;
+if all(fx>0.99)
+    error('dataset is fully sampled along dim %i.',opts.readout);
+end
 
 % estimate center of kspace
 [~,k] = max(reshape(abs(data),[],nc,2));
@@ -120,12 +140,9 @@ opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(mask)/numel(mask));
-fprintf('fwd: %f rev: %f\n',fx(1),fx(2));
+fprintf('fwd: %f(%i) rev: %f(%i)\n',fx(1),fx(1)*nx,fx(2),fx(2)*nx);
 if opts.loraks
     fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
-end
-if opts.delete1stpoint && numel(overlap)>1
-    fprintf('Deleted first point of readouts\n');
 end
 
 %% see if gpu is possible
@@ -310,24 +327,33 @@ xlabel(num2str(size(ksp,2),'ky [%i]'));
 ylabel(num2str(size(ksp,1),'kx [%i]'));
 title('kspace (rev)');
 
+% switch to image domain
+ksp = fftshift(ifft2(ifftshift(ksp)));
+
 % remove oversampling
 if opts.removeOS
     nx = size(ksp,1);
     ok = nx/4 + (1:nx/2);
-    ksp = fftshift(ifft(ksp,[],1));
     ksp = ksp(ok,:,:,:);
-    ksp = fft(ifftshift(ksp),[],1);
 end
 
 % show current image 
-subplot(2,4,3); imagesc(fftshift(sum(abs(ifft2(ksp(:,:,:,1))),3)));
-xlabel('y'); ylabel('x'); title(sprintf('iter %i (fwd)',iter));
-subplot(2,4,7); imagesc(fftshift(sum(abs(ifft2(ksp(:,:,:,2))),3)));
-xlabel('y'); ylabel('x'); title(sprintf('iter %i (rev)',iter));
+subplot(2,4,3); imagesc(sum(abs(ksp(:,:,:,1)),3));
+xlabel(num2str(size(ksp,2),'y [%i]'));
+ylabel(num2str(size(ksp,1),'x [%i]'));
+title(sprintf('iter %i (fwd)',iter));
+subplot(2,4,7); imagesc(sum(abs(ksp(:,:,:,2)),3));
+xlabel(num2str(size(ksp,2),'y [%i]'));
+ylabel(num2str(size(ksp,1),'x [%i]'));
+title(sprintf('iter %i (rev)',iter));
 
 % show one coil image phase
-subplot(2,4,4); imagesc(fftshift(angle(ifft2(fftshift(ksp(:,:,1,1))))));
-xlabel('y'); ylabel('x'); title(sprintf('phase (fwd)'));
-subplot(2,4,8); imagesc(fftshift(angle(ifft2(fftshift(ksp(:,:,1,2))))));
-xlabel('y'); ylabel('x'); title(sprintf('phase (rev)'));
+subplot(2,4,4); imagesc(angle(ksp(:,:,1,1)));
+xlabel(num2str(size(ksp,2),'y [%i]'));
+ylabel(num2str(size(ksp,1),'x [%i]'));
+title(sprintf('phase (fwd)'));
+subplot(2,4,8); imagesc(angle(ksp(:,:,1,2)));
+xlabel(num2str(size(ksp,2),'y [%i]'));
+ylabel(num2str(size(ksp,1),'x [%i]'));
+title(sprintf('phase (rev)'));
 drawnow;
