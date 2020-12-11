@@ -6,6 +6,10 @@ function [ksp basic] = dhe(fwd,rev,varargin)
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
 %
+% In the interests of using the same code to do
+% comparisons, can also pass a single fwd dataset
+% for (inefficient) SAKE/LORAKS reconstruction.
+%
 % ksp is the reconstructed kspace for fwd/rev
 % basic is a basic non-low rank reconstruction
 %
@@ -51,6 +55,9 @@ end
 if ndims(fwd)<2 || ndims(fwd)>3 || ~isfloat(fwd)
     error('''fwd'' must be a 3d float array.')
 end
+if ~exist('rev','var') || isempty(rev)
+    rev = fwd;
+end
 if ndims(rev)<2 || ndims(rev)>3 || ~isfloat(rev)
     error('''rev'' must be a 3d float array.')
 end
@@ -91,7 +98,9 @@ if opts.loraks; opts.dims(6) = 2; end
 data = cat(4,fwd,rev);
 mask = any(data,3);
 
-% delete first readout points (ADC "warm up")
+% delete first readout points (ADC "warm up"). this is slightly
+% heuristic to detect the asymmetric side of k-space. if it is
+% important, best to do it yourself with full knowledge.
 if opts.delete1st
     samples = any(any(mask,2),3);
     overlap = find(sum(samples,4)==2);
@@ -99,25 +108,36 @@ if opts.delete1st
         warning('not enough pts for delete1st (exactly 50% echos).');
     elseif numel(overlap)==nx
         warning('fully sampled - cannot detect which is 1st & last.');
+    elseif isequal(samples(:,1,1,1),samples(:,1,1,2)) % fwd=rev
+        if min(overlap)==1
+            for k = 0:opts.delete1st-1
+                mask(max(overlap)-k,:,:,:) = 0;
+            end
+        elseif max(overlap)==nx
+            for k = 0:opts.delete1st-1
+                mask(min(overlap)+k,:,:,:) = 0;
+            end
+        else
+            warning('unexpected problem - could not use delete1st');
+        end
     elseif samples(min(overlap)-1,1)
         for k = 0:opts.delete1st-1
             mask(min(overlap)+k,:,:,2) = 0;
             mask(max(overlap)-k,:,:,1) = 0;
         end
-    else
+    elseif samples(max(overlap)+1,1)
         for k = 0:opts.delete1st-1
             mask(min(overlap)+k,:,:,1) = 0;
             mask(max(overlap)-k,:,:,2) = 0;
         end
+    else
+        warning('unexpected problem - could not use delete1st');
     end
 end
 
 % echo fraction along x
 samples = any(any(mask,2),3);
 fx = squeeze(sum(samples)) / nx;
-if all(fx>0.99)
-    error('dataset is fully sampled along dim %i.',opts.readout);
-end
 
 % estimate center of kspace
 [~,k] = max(reshape(abs(data),[],nc,2));
@@ -140,7 +160,7 @@ opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(mask)/numel(mask));
-fprintf('fwd: %f(%i) rev: %f(%i)\n',fx(1),fx(1)*nx,fx(2),fx(2)*nx);
+fprintf('fwd: %f(%i) rev: %f(%i)\n',fx(1),round(fx(1)*nx),fx(2),round(fx(2)*nx));
 if opts.loraks
     fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
 end
@@ -230,7 +250,7 @@ for iter = 1:opts.maxit
 
 end
 
-% remove oversampling
+% remove 2x oversampling
 if opts.removeOS
     ok = nx/4 + (1:nx/2);
     ksp = fftshift(ifft(ksp,[],1));
