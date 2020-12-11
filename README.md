@@ -22,6 +22,13 @@ Justin P. Haldar
 https://doi.org/10.1109/TMI.2013.2293974
 
 
+## Minimizing echo and repetition times in magnetic resonance imaging using a double half‐echo k‐space acquisition and low‐rank reconstruction 
+
+Mark Bydder, Fadil Ali, Vahid Ghodrati, Peng Hu, Jingwen Yao, Benjamin M. Ellingson
+
+https://doi.org/10.1002/nbm.4458
+
+
 ## Optimal Shrinkage of Singular Values
 
 Danny Barash, Matan Gavish
