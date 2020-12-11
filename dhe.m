@@ -1,7 +1,8 @@
 function [ksp basic] = dhe(fwd,rev,varargin)
 % [ksp basic] = dhe(fwd,rev,varargin)
 %
-% Double Half Echo Reconstruction (2D only).
+% Double Half Echo Reconstruction (2D only)
+% (ref: http://dx.doi.org/10.1002/nbm.4458)
 %
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
