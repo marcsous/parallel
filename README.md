@@ -1,5 +1,5 @@
 # parallel
-A few parallel MRI reconstruction algorithms (GRAPPA2D GRAPPA3D SAKE2D SAKE3D DHE2D). Basic MATLAB implementations.
+A few parallel MRI reconstruction algorithms (HOMODYNE GRAPPA2D GRAPPA3D SAKE2D SAKE3D DHE2D). Basic MATLAB implementations.
 
 ## Generalized autocalibrating partially parallel acquisitions (GRAPPA)
 
