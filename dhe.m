@@ -158,6 +158,9 @@ end
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 
+% to try compressed sensing
+Q = DWT([nx ny],'db2'); % coils [nx ny nc]?
+
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(mask)/numel(mask));
@@ -192,6 +195,14 @@ for iter = 1:opts.maxit
 
     % data consistency
     ksp = ksp + bsxfun(@times,data-ksp,mask);
+    
+    % threshold image in wavelet domain
+    %if iter>10
+    %    opts.sparsity=0.1;
+    %    ksp = ifft2(ksp);
+    %    ksp = Q.thresh(ksp,opts.sparsity);
+    %    ksp = fft2(ksp);
+    %end
     
     % data matrix
     A = make_data_matrix(ksp,opts);
@@ -318,6 +329,9 @@ data = mean(reshape(A,nx,ny,nc,2,[]),5);
 %% show plots of various things
 function display(W,f,noise_floor,ksp,iter,norms,tol,mask,opts,converged)
 
+% if display is disabled (gadgetron) then bail out
+if ~usejava('desktop'); return; end
+
 % plot singular values
 subplot(2,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f))); 
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
@@ -331,9 +345,7 @@ legend('||A||_*','||A||_F^{-1}'); axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
 
 % mask on iter=1 to show the blackness of kspace
-if iter==1
-    ksp = bsxfun(@times,ksp,mask);
-end
+if iter==1; ksp = bsxfun(@times,ksp,mask); end
 
 % prefer ims over imagesc
 if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
