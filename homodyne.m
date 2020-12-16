@@ -12,14 +12,19 @@ function [image phase] = homodyne(kspace,varargin)
 % -varargin: pairs of options/values (e.g. 'radial',1)
 %
 % Options:
-% -opts.method ('homodyne','pocs','least-squares')
+% -opts.method ('homodyne','pocs','least-squares','compressed-sensing')
 % -opts.window ('step','ramp','quad','cube','quartic')
 
 %% options
 
-opts.method = 'homodyne'; % 'homodyne','pocs','least-squares'
+opts.method = 'homodyne'; % 'homodyne','pocs','least-squares','compressed-sensing'
 opts.window = 'cubic'; % 'step','ramp','quad','cubic','quartic'
 opts.removeOS = 0; % remove 2x oversampling in specified dimension (0=off)
+
+% regularization terms (only apply to least squares/compressed sensing)
+opts.damp = 1e-4; % L2 penalty on solution norm
+opts.lambda = 1e-2; % L2 penalty on imag norm
+opts.cs = 5e-4; % L1 penalty on tranform norm
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -74,52 +79,57 @@ else
         error('kspace is too undersampled - must be at least 0.5');
     end
     
-    if all(f>0.99)
-        error('kspace is fully sampled - no need for homodyne');
+    if all(f>0.95)
+        warning('kspace is fully sampled - skipping homodyne');
+        opts.method = 'none'; % fully sampled - bypass recon
     end
     
     %% set up filters
-    if dim==1; H = zeros(nx,1,1); index = kx; end
-    if dim==2; H = zeros(1,ny,1); index = ky; end
-    if dim==3; H = zeros(1,1,nz); index = kz; end
-    H(index) = 1;
     
-    % high pass filter
-    H = H + flip(1-H);
-    
-    % symmetric center of kspace
-    center = find(H==1);
-    center(end+1) = numel(H)/2+1; % make sure 
-    center = unique(center);
-    center = [center(1)-1;center(:);center(end)+1]; % pad by 1 point
-    ramp = linspace(H(center(1)),H(center(end)),numel(center)); % symmetric points sum to 2
-    
-    switch opts.window
-        case 'step'
-            H(center) = 1;
-        case {'linear','ramp'}
-            H(center) = ramp;
-        case {'quadratic','quad'}
-            H(center) = (ramp-1).^2.*sign(ramp-1)+1;
-        case {'cubic','cube'}
-            H(center) = (ramp-1).^3+1;
-        case {'quartic'}
-            H(center) = (ramp-1).^4.*sign(ramp-1)+1;
-        otherwise
-            error('opts.window not recognized');
+    if ~isequal(opts.method,'none')
+        
+        if dim==1; H = zeros(nx,1,1); index = kx; end
+        if dim==2; H = zeros(1,ny,1); index = ky; end
+        if dim==3; H = zeros(1,1,nz); index = kz; end
+        H(index) = 1;
+        
+        % high pass filter
+        H = H + flip(1-H);
+        
+        % symmetric center of kspace
+        center = find(H==1);
+        center(end+1) = numel(H)/2+1; % make sure
+        center = unique(center);
+        center = [center(1)-1;center(:);center(end)+1]; % pad by 1 point
+        ramp = linspace(H(center(1)),H(center(end)),numel(center)); % symmetric points sum to 2
+        
+        switch opts.window
+            case 'step'
+                H(center) = 1;
+            case {'linear','ramp'}
+                H(center) = ramp;
+            case {'quadratic','quad'}
+                H(center) = (ramp-1).^2.*sign(ramp-1)+1;
+            case {'cubic','cube'}
+                H(center) = (ramp-1).^3+1;
+            case {'quartic'}
+                H(center) = (ramp-1).^4.*sign(ramp-1)+1;
+            otherwise
+                error('opts.window not recognized');
+        end
+        
+        % low pass filter
+        L = sqrt(max(0,1-(H-1).^2));
+        
+        % low resolution phase
+        phase = bsxfun(@times,L,kspace);
+        if false
+            % smoothing in the other in-plane dimension (no clear benefit)
+            if dim~=1; phase = bsxfun(@times,phase,sin(linspace(0,pi,nx)')); end
+            if dim~=2; phase = bsxfun(@times,phase,sin(linspace(0,pi,ny) )); end
+        end
+        phase = angle(ifftn(ifftshift(phase)));
     end
-    
-    % low pass filter
-    L = sqrt(max(0,1-(H-1).^2));
-    
-    % low resolution phase
-    phase = bsxfun(@times,L,kspace);
-    if false
-        % smoothing in the other in-plane dimension (no clear benefit)
-        if dim~=1; phase = bsxfun(@times,phase,sin(linspace(0,pi,nx)')); end
-        if dim~=2; phase = bsxfun(@times,phase,sin(linspace(0,pi,ny) )); end
-    end
-    phase = angle(ifftn(ifftshift(phase)));
     
     %% reconstruction
     
@@ -127,13 +137,13 @@ else
     
     switch(opts.method)
         
-        case 'homodyne';
+        case 'homodyne'
             
             image = bsxfun(@times,H,kspace);
             image = ifftn(ifftshift(image)).*exp(-i*phase);
-            image = real(image);
+            image = abs(real(image));
             
-        case 'pocs';
+        case 'pocs'
             
             tmp = kspace;
             
@@ -149,45 +159,64 @@ else
                 
             end
             
-        case 'least-squares';
-            
-            % penalized least squares requires pcgpc.m
-            lambda = 1e-2; damp = 1e-4; % exact values not important
+        case 'least-squares'
+
+            % L2 penalized least squares requires pcgpc.m
             b = reshape(exp(-i*phase).*ifftn(ifftshift(kspace)),[],1);
-            tmp = pcgpc(@(x)pcpop(x,mask,phase,lambda,damp),b,[],maxit);
-            image = real(reshape(tmp,size(phase)));
+            tmp = pcgpc(@(x)pcpop(x,mask,phase,opts.lambda,opts.damp),b,[],maxit);
+            image = abs(real(reshape(tmp,size(phase))));
+
+        case 'compressed-sensing'
             
-        otherwise;
+            % L1 penalized least squares requires pcgpc.m
+            Q = DWT([nx ny nz],'db2'); % wavelet transform
+            b = reshape(Q*(exp(-i*phase).*ifftn(ifftshift(kspace))),[],1);
+            tmp = pcgL1(@(x)pcpop(x,mask,phase,opts.lambda,opts.damp,Q),b,opts.cs);
+            image = abs(real(reshape(Q'*tmp,size(phase))));
+            
+        case 'none'
+            
+            tmp = ifftn(kspace);
+            image = abs(tmp);
+            phase = angle(tmp);
+            
+        otherwise
+            
             error('unknown opts.method ''%s''',opts.method);
             
     end
     
-    % twix data are always fftshifted
-    image = fftshift(image);
-    phase = fftshift(phase);
-    
-    switch opts.removeOS
-        case 1; ok = nx/4 + (1:nx/2);
+    if opts.removeOS
+
+        image = fftshift(image);
+        phase = fftshift(phase);
+        
+        switch opts.removeOS
+            case 1; ok = nx/4 + (1:nx/2);
                 image = image(ok,:,:,:);
                 phase = phase(ok,:,:,:);
-        case 2; ok = ny/4 + (1:ny/2);
+            case 2; ok = ny/4 + (1:ny/2);
                 image = image(:,ok,:,:);
                 phase = phase(:,ok,:,:);
-        case 3; ok = nz/4 + (1:nz/2);
+            case 3; ok = nz/4 + (1:nz/2);
                 image = image(:,:,ok,:);
                 phase = phase(:,:,ok,:);
-    end 
-
+        end
+        
+    end
+    
 end
 
 %% phase constrained projection operator (image <- image)
-function y = pcpop(x,mask,phase,lambda,damp)
+function y = pcpop(x,mask,phase,lambda,damp,Q)
 % y = P' * F' * W * F * P * x + i * imag(x) + damp * x
 x = reshape(x,size(phase));
+if exist('Q','var'); x = Q'*x; end
 y = exp(i*phase).*x;
 y = fftn(y);
 y = fftshift(mask).*y;
 y = ifftn(y);
 y = exp(-i*phase).*y;
 y = y + lambda*i*imag(x) + damp*x;
+if exist('Q','var'); y = Q*y; end
 y = reshape(y,[],1);

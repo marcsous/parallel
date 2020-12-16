@@ -76,12 +76,14 @@ x = zeros(n,1,'like',b);
 z = zeros(n,1,'like',b);
 u = zeros(n,1,'like',b);
 
+normb = norm(b);
+
 for k = 1:opts.maxit
 
-    % x-update with pcg
+    % x-update with pcg - doesn't need to be very accurate - sqrt tol OK
     Ak = @(x)A(x) + opts.rho*x;
     bk = b + opts.rho*(z-u);
-    [x flag relres iters resvec] = pcgpc(Ak,bk,[],[],[],[],x);
+    [x flag relres iters resvec] = pcgpc(Ak,bk,sqrt(opts.tol),[],[],[],x);
 
     if flag~=0
         warning('PCG problem (iter=%i flag=%i)',k,flag);
@@ -99,10 +101,10 @@ for k = 1:opts.maxit
     u = u + (x_hat - z);
 
     % check convergence
-    if norm(x-z) <  opts.tol*norm(b)
+    if norm(x-z) <  opts.tol*normb
         break;
     end
-    
+
 end
 
 % report sparsity
@@ -114,7 +116,6 @@ if norm(x-z) <  opts.tol*norm(b)
 else
     fprintf('%s: tolerance not reached in %i iterations\n',mfilename,k);  
 end
-
 
 x = z;
 
