@@ -150,8 +150,10 @@ classdef DWT
             
             if ~exist('sparsity','var')
                 sparsity = 0.5; % default
+            elseif ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<=0
+                error('sparsity must be a non-zero scalar')
             end
-
+            
             y = obj * x;
 
             % no. coils
@@ -159,12 +161,12 @@ classdef DWT
             
             % coils separate
             y = reshape(y,[],nc);
-            
+
             % truncate based on abs
             [~,ok] = sort(abs(y),'descend');
+            k = ceil(size(y,1) * sparsity);   
             for c = 1:nc
-                k = floor(size(y,1)*sparsity);
-                y(ok(end-k:end,c),c) = 0;
+                y(ok(k:end,c),c) = 0;
             end
 
             y = obj' * y;
