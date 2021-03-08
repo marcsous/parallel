@@ -1,8 +1,9 @@
 function [ksp basic] = dhe(fwd,rev,varargin)
 % [ksp basic] = dhe(fwd,rev,varargin)
 %
-% Double Half Echo Reconstruction (2D only).
-%
+% Double Half Echo Reconstruction (2D only)
+% Ref: http://dx.doi.org/10.1002/nbm.4458
+
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
 %
@@ -51,6 +52,9 @@ end
 % argument checks
 if ndims(fwd)<2 || ndims(fwd)>3 || ~isfloat(fwd)
     error('''fwd'' must be a 3d float array.')
+end
+if ~exist('rev','var') || isempty(rev)
+    rev = fwd;
 end
 if ndims(rev)<2 || ndims(rev)>3 || ~isfloat(rev)
     error('''rev'' must be a 3d float array.')
