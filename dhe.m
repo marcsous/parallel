@@ -1,15 +1,10 @@
 function [ksp basic] = dhe(fwd,rev,varargin)
 % [ksp basic] = dhe(fwd,rev,varargin)
 %
-% Double Half Echo Reconstruction (2D only)
-% (ref: http://dx.doi.org/10.1002/nbm.4458)
+% Double Half Echo Reconstruction (2D only).
 %
 % fwd = 2D kspace with forward readout direction
 % rev = 2D kspace with reverse readout direction
-%
-% In the interests of using the same code to do
-% comparisons, can also pass a single fwd dataset
-% for (inefficient) SAKE/LORAKS reconstruction.
 %
 % ksp is the reconstructed kspace for fwd/rev
 % basic is a basic non-low rank reconstruction
@@ -29,13 +24,14 @@ end
 %% setup
 
 % default options
-opts.width = 5; % kernel width
-opts.radial = 1; % use radial kernel
+opts.width = 6; % kernel width [kx ky]
+opts.radial = 1; % radial kernel
 opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.noise = []; % noise std, if available
-opts.delete1st = 1; % delete 1st readout points (number)
+opts.center = []; % center of kspace, if available
+opts.delete1st = 4; % delete 1st readout points (number)
 opts.readout = 1; % readout dimension (1 or 2)
 opts.removeOS = 0; % remove 2x readout oversampling (0=off)
 
@@ -56,9 +52,6 @@ end
 if ndims(fwd)<2 || ndims(fwd)>3 || ~isfloat(fwd)
     error('''fwd'' must be a 3d float array.')
 end
-if ~exist('rev','var') || isempty(rev)
-    rev = fwd;
-end
 if ndims(rev)<2 || ndims(rev)>3 || ~isfloat(rev)
     error('''rev'' must be a 3d float array.')
 end
@@ -68,6 +61,10 @@ end
 if opts.removeOS~=0 && opts.removeOS~=1
     error('removeOS must be 1 or 0.');
 end
+if isscalar(opts.width)
+    opts.width = [opts.width opts.width];
+end
+opts.width = max(opts.width,1);
 if opts.readout==2
     fwd = permute(fwd,[2 1 3]);
     rev = permute(rev,[2 1 3]);  
@@ -80,16 +77,16 @@ end
 [nx ny nc] = size(fwd);
 
 % convolution kernel indicies
-[x y] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
+[x y] = ndgrid(-fix(opts.width(1)/2):fix(opts.width(1)/2), ...
+               -fix(opts.width(2)/2):fix(opts.width(2)/2));
 if opts.radial
-    k = hypot(x,y)<=opts.width/2;
+    k = hypot(x/opts.width(1),y/opts.width(2))<=0.5;
 else
-    k = abs(x)<=opts.width/2 & abs(y)<=opts.width/2;
+    k = x/opts.width(1)<=0.5 & y/opts.width(2)<=0.5;
 end
-nk = nnz(k);
 opts.kernel.x = x(k);
 opts.kernel.y = y(k);
-opts.kernel.mask = k;
+nk = nnz(k);
 
 % dimensions of the dataset (4th dim for fwd/rev)
 opts.dims = [nx ny nc 2 nk 1];
@@ -99,9 +96,7 @@ if opts.loraks; opts.dims(6) = 2; end
 data = cat(4,fwd,rev);
 mask = any(data,3);
 
-% delete first readout points (ADC "warm up"). this is slightly
-% heuristic to detect the asymmetric side of k-space. if it is
-% important, best to do it yourself with full knowledge.
+% delete first readout points (ADC "warm up")
 if opts.delete1st
     samples = any(any(mask,2),3);
     overlap = find(sum(samples,4)==2);
@@ -109,30 +104,16 @@ if opts.delete1st
         warning('not enough pts for delete1st (exactly 50% echos).');
     elseif numel(overlap)==nx
         warning('fully sampled - cannot detect which is 1st & last.');
-    elseif isequal(samples(:,1,1,1),samples(:,1,1,2)) % fwd=rev
-        if min(overlap)==1
-            for k = 0:opts.delete1st-1
-                mask(max(overlap)-k,:,:,:) = 0;
-            end
-        elseif max(overlap)==nx
-            for k = 0:opts.delete1st-1
-                mask(min(overlap)+k,:,:,:) = 0;
-            end
-        else
-            warning('unexpected problem - could not use delete1st');
-        end
     elseif samples(min(overlap)-1,1)
         for k = 0:opts.delete1st-1
             mask(min(overlap)+k,:,:,2) = 0;
             mask(max(overlap)-k,:,:,1) = 0;
         end
-    elseif samples(max(overlap)+1,1)
+    else
         for k = 0:opts.delete1st-1
             mask(min(overlap)+k,:,:,1) = 0;
             mask(max(overlap)-k,:,:,2) = 0;
         end
-    else
-        warning('unexpected problem - could not use delete1st');
     end
 end
 
@@ -141,10 +122,12 @@ samples = any(any(mask,2),3);
 fx = squeeze(sum(samples)) / nx;
 
 % estimate center of kspace
-[~,k] = max(reshape(abs(data),[],nc,2));
-[x y] = ind2sub([nx ny],reshape(k,nc,2));
-center = round([median(x,1);median(y,1)]); % median over coils
-opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
+if isempty(opts.center)
+    [~,k] = max(reshape(abs(data),[],nc,2));
+    [x y] = ind2sub([nx ny],reshape(k,nc,2));
+    center = round([median(x,1);median(y,1)]); % median over coils
+    opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
+end
 
 % align center of kx (helps for loraks)
 if opts.loraks
@@ -158,13 +141,10 @@ end
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 
-% to try compressed sensing
-Q = DWT([nx ny],'db2'); % coils [nx ny nc]?
-
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(mask)/numel(mask));
-fprintf('fwd: %f(%i) rev: %f(%i)\n',fx(1),round(fx(1)*nx),fx(2),round(fx(2)*nx));
+fprintf('fwd: %.4f(%i) rev: %.4f(%i)\n',fx(1),round(fx(1)*nx),fx(2),round(fx(2)*nx));
 if opts.loraks
     fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
 end
@@ -195,14 +175,6 @@ for iter = 1:opts.maxit
 
     % data consistency
     ksp = ksp + bsxfun(@times,data-ksp,mask);
-    
-    % threshold image in wavelet domain
-    %if iter>10
-    %    opts.sparsity=0.1;
-    %    ksp = ifft2(ksp);
-    %    ksp = Q.thresh(ksp,opts.sparsity);
-    %    ksp = fft2(ksp);
-    %end
     
     % data matrix
     A = make_data_matrix(ksp,opts);
@@ -245,7 +217,7 @@ for iter = 1:opts.maxit
     else
         tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
     end
-    converged = sum(tol<opts.tol) > 10;
+    converged = sum(tol<opts.tol)>10 || iter==opts.maxit;
 
     % display progress every 1 second
     if iter==1 || toc(t) > 1 || converged
@@ -262,7 +234,7 @@ for iter = 1:opts.maxit
 
 end
 
-% remove 2x oversampling
+% remove oversampling
 if opts.removeOS
     ok = nx/4 + (1:nx/2);
     ksp = fftshift(ifft(ksp,[],1));
@@ -279,6 +251,9 @@ if opts.readout==2
     ksp = permute(ksp,[2 1 3 4]);
     basic = permute(basic,[2 1 3]);
 end
+
+% caller expects fwd/rev
+basic = cat(4,basic,basic);
 
 if nargout==0; clear; end % avoid dumping to screen
 
@@ -329,7 +304,7 @@ data = mean(reshape(A,nx,ny,nc,2,[]),5);
 %% show plots of various things
 function display(W,f,noise_floor,ksp,iter,norms,tol,mask,opts,converged)
 
-% if display is disabled (gadgetron) then bail out
+% on gadgetron, no display
 if ~usejava('desktop'); return; end
 
 % plot singular values
@@ -345,7 +320,9 @@ legend('||A||_*','||A||_F^{-1}'); axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
 
 % mask on iter=1 to show the blackness of kspace
-if iter==1; ksp = bsxfun(@times,ksp,mask); end
+if iter==1
+    ksp = bsxfun(@times,ksp,mask);
+end
 
 % prefer ims over imagesc
 if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
