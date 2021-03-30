@@ -67,8 +67,9 @@ if opts.removeOS~=0 && opts.removeOS~=1
 end
 if isscalar(opts.width)
     opts.width = [opts.width opts.width];
+elseif opts.readout==2
+    opts.width = flip(opts.width);
 end
-opts.width = max(opts.width,1);
 if opts.readout==2
     fwd = permute(fwd,[2 1 3]);
     rev = permute(rev,[2 1 3]);  
@@ -84,9 +85,9 @@ end
 [x y] = ndgrid(-fix(opts.width(1)/2):fix(opts.width(1)/2), ...
                -fix(opts.width(2)/2):fix(opts.width(2)/2));
 if opts.radial
-    k = hypot(x/opts.width(1),y/opts.width(2))<=0.5;
+    k = hypot(x/max(1,opts.width(1)),y/max(1,opts.width(2)))<=0.5;
 else
-    k = x/opts.width(1)<=0.5 & y/opts.width(2)<=0.5;
+    k = x/max(1,opts.width(1))<=0.5 & y/max(1,opts.width(2))<=0.5;
 end
 opts.kernel.x = x(k);
 opts.kernel.y = y(k);
