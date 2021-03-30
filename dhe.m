@@ -82,8 +82,8 @@ end
 [nx ny nc] = size(fwd);
 
 % convolution kernel indicies
-[x y] = ndgrid(-fix(opts.width(1)/2):fix(opts.width(1)/2), ...
-               -fix(opts.width(2)/2):fix(opts.width(2)/2));
+[x y] = ndgrid(-ceil(opts.width(1)/2):ceil(opts.width(1)/2), ...
+               -ceil(opts.width(2)/2):ceil(opts.width(2)/2));
 if opts.radial
     k = hypot(x/max(1,opts.width(1)),y/max(1,opts.width(2)))<=0.5;
 else
