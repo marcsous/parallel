@@ -25,7 +25,7 @@ end
 %% setup
 
 % default options
-opts.width = 6; % kernel width [kx ky]
+opts.width = [6 6]; % kernel width
 opts.radial = 1; % radial kernel
 opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % tolerance (fraction change in norm)
