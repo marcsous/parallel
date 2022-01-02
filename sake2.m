@@ -24,19 +24,22 @@ if nargin==0
     load head.mat
     data = fftshift(fft2(data));
     mask = false(256,256);
-    mask(:,1:2:256) = 1; % undersampling
-    mask(:,127:129) = 1; % self-calibration
+    mask(:,1:3:256) = 1; % undersampling
+    mask(:,127:131) = 1; % self-cal
+    %cal = data(:,120:138,:); % separate calibation
+    %varargin = {'cal',cal};    
     data = bsxfun(@times,data,mask); % clean
     clearvars -except data varargin
 end
+
 
 %% setup
 
 % default options
 opts.width = 5; % kernel width
-opts.radial = 1; % use radial kernel
+opts.radial = 0; % use radial kernel
 opts.loraks = 0; % phase constraint (loraks)
-opts.tol = 1e-6; % tolerance (fraction change in norm)
+opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.noise = []; % noise std, if available
 opts.center = []; % center of kspace, if available
@@ -91,10 +94,13 @@ end
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 
-% set up wavelet transform
-if opts.sparsity<1
-    Q = DWT([nx ny],opts.wname); % coils [nx ny nc]?
+% estimate noise std (heuristic)
+if isempty(opts.noise)
+    tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
+    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k); % trim 20%
+    opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
 end
+noise_floor = opts.noise * sqrt(nnz(data)/nc);
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
@@ -123,11 +129,20 @@ if ~isempty(opts.cal)
         error('Separate calibration not compatible with loraks.');
     end
     
-    % caluculate row space
     cal = cast(opts.cal,'like',data);
     A = make_data_matrix(cal,opts);
-    [V,~] = svd(A'*A);
+    [V,~] = svd(A'*A); % rowspace
     
+else
+    
+    A = make_data_matrix(data,opts);
+    ok = all(A,2); % complete rows
+    if nnz(ok)
+        [~,~,V] = svd(A(ok,:));
+    else
+        V = 1; % there is nothing
+    end
+
 end
 
 %% Cadzow algorithm
@@ -136,13 +151,6 @@ mask = any(data,3); % sampling mask
 ksp = zeros(size(data),'like',data);
 
 for iter = 1:opts.maxit
-
-    % threshold image in wavelet domain
-    if opts.sparsity<1 && ~isempty(opts.noise)
-        ksp = ifft2(ksp);
-        ksp = Q.thresh(ksp,opts.sparsity);
-        ksp = fft2(ksp);
-    end
     
     % data consistency
     ksp = ksp + bsxfun(@times,data-ksp,mask);
@@ -150,34 +158,18 @@ for iter = 1:opts.maxit
     % calibration matrix
     A = make_data_matrix(ksp,opts);
 
-    % row space and singular values (squared)
+    % row space and singular values
     if isempty(opts.cal)
         [V W] = svd(A'*A);
         W = diag(W);
     else
         W = svd(A'*A);
     end
-    
-    % estimate noise floor (heuristic)
-    if isempty(opts.noise)
-        hi = nnz(W > eps(numel(W)*W(1))); % skip true zeros
-        for lo = 1:hi
-            h = hist(W(lo:hi),sqrt(hi-lo));
-            [~,k] = max(h);
-            if k>1; break; end
-        end
-        noise_floor = sqrt(median(W(lo:hi)));
-        opts.noise = noise_floor / sqrt(nnz(mask));
-        fprintf('Noise std estimate: %.2e\n',opts.noise);
-    end
-    noise_floor = opts.noise * sqrt(nnz(mask));
-
-    % unsquare singular values
     W = sqrt(gather(W));
     
     % minimum variance filter
     f = max(0,1-noise_floor.^2./W.^2);
-    A = A * (V * diag(f) * V');
+    A = A * (V * diag(f) * V');   
     
     % hankel structure (average along anti-diagonals)   
     ksp = undo_data_matrix(A,opts);
@@ -278,7 +270,7 @@ xlabel('dim 2'); ylabel('dim 1'); title(sprintf('iter %i',iter));
 
 % plot change in metrics
 subplot(1,4,4);
-ax = plotyy(1:iter,norms(1,:),1:iter,1./norms(2,:));
-legend('||A||_*','||A||_F^{-1}'); axis(ax,'tight');
+ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:));
+legend('||A||_*','||A||_F'); axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
 drawnow;

@@ -35,8 +35,8 @@ end
 %% setup
 
 % default options
-opts.width = 4; % kernel width
-opts.radial = 1; % use radial kernel
+opts.width = 4; % kernel width: [x y z] or scalar
+opts.radial = 0; % use radial kernel [1 or 0]
 opts.loraks = 0; % phase constraint (loraks)
 opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e3; % maximum no. iterations
@@ -63,12 +63,20 @@ if ndims(data)<3 || ndims(data)>4 || ~isfloat(data)
 end
 [nx ny nz nc] = size(data);
 
+if numel(opts.width)==1
+    opts.width = [1 1 1] * opts.width;
+elseif numel(opts.width~=3)
+    error('width must have 3 elements');
+end
+
 % convolution kernel indicies
-[x y z] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
+[x y z] = ndgrid(-ceil(opts.width(1)/2):ceil(opts.width(1)/2), ...
+                 -ceil(opts.width(2)/2):ceil(opts.width(2)/2), ...
+                 -ceil(opts.width(3)/2):ceil(opts.width(3)/2));
 if opts.radial
-    k = sqrt(x.^2+y.^2+z.^2)<=opts.width/2;
+    k = x.^2/max(1,opts.width(1)^2)+y.^2/max(1,opts.width(2)^2)+z.^2/max(1,opts.width(3)^2) <= 0.25;
 else
-    k = abs(x)<=opts.width/2 & abs(y)<=opts.width/2 & abs(z)<=opts.width/2;
+    k = abs(x)/max(1,opts.width(1))<=0.5 & abs(y)/max(1,opts.width(2))<=0.5 & abs(z)/max(1,opts.width(3))<=0.5;
 end
 nk = nnz(k);
 opts.kernel.x = x(k);
@@ -93,6 +101,14 @@ end
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 opts.flip.z = circshift(nz:-1:1,[0 2*opts.center(3)-1]);
+
+% estimate noise std (heuristic)
+if isempty(opts.noise)
+    tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
+    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k); % trim 20%
+    opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
+end
+noise_floor = opts.noise * sqrt(nnz(data)/nc);
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
@@ -141,29 +157,13 @@ for iter = 1:opts.maxit
     % normal calibration matrix
     AA = make_data_matrix(ksp,opts);
     
-    % row space and singular values (squared)
+    % row space and singular values
     if isempty(opts.cal)
         [V W] = svd(AA);
         W = diag(W);
     else
         W = svd(AA);
     end
-
-    % estimate noise floor (heuristic)
-    if isempty(opts.noise)
-        hi = nnz(W > eps(numel(W)*W(1))); % skip true zeros
-        for lo = 1:hi
-            h = hist(W(lo:hi),sqrt(hi-lo));
-            [~,k] = max(h);
-            if k>1; break; end
-        end
-        noise_floor = sqrt(median(W(lo:hi)));
-        opts.noise = noise_floor / sqrt(nnz(mask));
-        fprintf('Noise std estimate: %.2e\n',opts.noise);
-    end
-    noise_floor = opts.noise * sqrt(nnz(mask));
-    
-    % unsquare singular values
     W = sqrt(gather(W));
     
     % minimum variance filter
