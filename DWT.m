@@ -16,6 +16,9 @@ classdef DWT
     %   z = W'* y; % inverse
     %   norm(x-z)
     %     ans = 1.0431e-07
+    %
+    %  -to threshold use W.thresh(x,sparsity) to do
+    %   soft-thresholding to a given sparsity
    
     properties (SetAccess = private)
         sizeINI
@@ -150,8 +153,8 @@ classdef DWT
             
             if ~exist('sparsity','var')
                 sparsity = 0.5; % default
-            elseif ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<=0
-                error('sparsity must be a non-zero scalar')
+            elseif ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<0 || sparsity>1
+                error('sparsity must be a scalar between 0 and 1')
             end
             
             y = obj * x;
@@ -159,22 +162,26 @@ classdef DWT
             % no. coils
             nc = numel(x) / prod(obj.sizeINI);
             
-            % coils separate
+            % separate coils            
             y = reshape(y,[],nc);
 
-            % truncate based on abs
-            [~,ok] = sort(abs(y),'descend');
-            k = ceil(size(y,1) * sparsity);   
-            for c = 1:nc
-                y(ok(k:end,c),c) = 0;
-            end
+            % soft-threshold to a target sparsity
+            tmp = abs(y);
+            [~,ok] = sort(tmp,'descend');
+            k = ceil(size(y,1) * sparsity);
 
+            for c = 1:nc
+                %y(ok(k:end,c),c) = 0; % hard threshold
+                thresh = tmp(ok(k,c),c); % soft threshold
+                y(:,c) = max(0,tmp(:,c)-thresh).*sign(y(:,c));
+            end
+            
             y = obj' * y;
             
             y = reshape(y,size(x)); % original size
             
         end
-        
+
         %% detect W' and set flag
         function obj = ctranspose(obj)
             
