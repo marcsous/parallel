@@ -89,9 +89,9 @@ else
             opts.p{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
             opts.p{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
         case 3;
-            opts.p{1} = [1 1 1 1 1;0 0 0 0 0;1 1 1 1 1]; % y only
+            opts.p{1} = [1 1 1;0 0 0;1 1 1]; % y only
         case 4;
-            opts.p{1} = [1 0 1;1 0 1;1 0 1;1 0 1;1 0 1]; % z only
+            opts.p{1} = [1 0 1;1 0 1;1 0 1]; % z only
         otherwise;
             error('pattern not recognized');
     end
