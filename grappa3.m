@@ -27,6 +27,11 @@ function ksp = grappa3(data,mask,varargin)
 %                  x o x o           |1 0 1|
 %                  x o x o
 %
+% (5) 2x checkers: x o x o  opts.p = |0 1 0|
+%                  o x o x           |1 0 1|
+%                  x o x o           |0 1 0|
+%                  o x o x
+%
 % Otherwise patterns may be passed by cell array (see below).
 %
 % Inputs:
@@ -92,6 +97,8 @@ else
             opts.p{1} = [1 1 1;0 0 0;1 1 1]; % y only
         case 4;
             opts.p{1} = [1 0 1;1 0 1;1 0 1]; % z only
+        case 5;
+            opts.p{1} = [0 1 0;1 0 1;0 1 0]; % yz checkerboard
         otherwise;
             error('pattern not recognized');
     end
