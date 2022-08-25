@@ -319,7 +319,7 @@ for j = 1:numel(pattern)
     % linear solution X = pinv(A)*B
     [V S] = svd(A'*A); S = diag(S);
     if isempty(opts.tol)
-        tol = min(size(A))*eps(S(1));
+        tol = eps(max(S));
     else
         tol = opts.tol;
     end
@@ -339,7 +339,7 @@ for j = 1:numel(pattern)
     Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
 
 end
-fprintf('SVD tolerance = %.2e (%.4f%%)\n',tol,100*tol/S(1));
+fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc;
 
 %% GRAPPA recon in multiple passes
