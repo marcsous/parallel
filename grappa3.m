@@ -339,7 +339,7 @@ for j = 1:numel(pattern)
     Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
 
 end
-%fprintf('SVD tolerance = %.2e (%.4f%%)\n',tol,100*tol/S(1));
+fprintf('SVD tolerance = %.2e (%.4f%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc;
 
 %% GRAPPA recon in multiple passes
