@@ -6,31 +6,26 @@ function ksp = grappa3(data,mask,varargin)
 % by setting up the convolution patterns. The following
 % patterns are pre-configured:
 %
-% (1) 2x2 regular: x o x o  opts.p = |1 0 1| and |0 1 0|
-%                  o o o o           |0 0 0|     |1 0 1|
-%                  x o x o           |1 0 1|     |0 1 0|
+% (1) 2x2 regular: x o x o  pattern = |1 0 1| and |0 1 0|
+%                  o o o o            |0 0 0|     |1 0 1|
+%                  x o x o            |1 0 1|     |0 1 0|
 %                  o o o o
 %
-% (2) 2x2 shifted: x o x o  opts.p = |0 1 0| and |1 1 1|
-%                  o o o o           |0 0 0|     |0 0 0|
-%                  o x o x           |1 0 1|     |1 1 1|
-%                  o o o o           |0 0 0|
-%                                    |0 1 0|
+% (2) 2x2 shifted: x o x o  pattern = |0 1 0| and |1 1 1|
+%                  o o o o            |0 0 0|     |0 0 0|
+%                  o x o x            |1 0 1|     |1 1 1|
+%                  o o o o            |0 0 0|
+%                                     |0 1 0|
 %
-% (3) 2x1 regular: x x x x  opts.p = |1 1 1|
-%                  o o o o           |0 0 0|
-%                  x x x x           |1 1 1|
+% (3) 2x1 regular: x x x x  pattern = |1 1 1|
+%                  o o o o            |0 0 0|
+%                  x x x x            |1 1 1|
 %                  o o o o
 %
-% (4) 1x2 regular: x o x o  opts.p = |1 0 1|
-%                  x o x o           |1 0 1|
-%                  x o x o           |1 0 1|
+% (4) 1x2 regular: x o x o  pattern = |1 0 1|
+%                  x o x o            |1 0 1|
+%                  x o x o            |1 0 1|
 %                  x o x o
-%
-% (5) 2x checkers: x o x o  opts.p = |0 1 0|
-%                  o x o x           |1 0 1|
-%                  x o x o           |0 1 0|
-%                  o x o x
 %
 % Otherwise patterns may be passed by cell array (see below).
 %
@@ -45,6 +40,7 @@ function ksp = grappa3(data,mask,varargin)
 %% example dataset
 
 if nargin==0
+    % note: this doesn't look perfect... R=4 with 6coil is pushing it!
     disp('Running example...')
     load phantom3D_6coil.mat
     data = fftshift(data); % center kspace
@@ -52,8 +48,8 @@ if nargin==0
     mask = zeros(size(data,2),size(data,3));
     mask(1:2:end,1:2:end) = 1; % undersample 2x2
     mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
-    varargin{1} = 'pattern'; varargin{2} = 2;
-    varargin{3} = 'cal'; varargin{4} = data(21:110,51:70,41:60,:); % separate calibration
+    varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
+    varargin{3} = 'cal'; varargin{4} = data(21:110,51:70,41:60,:);; % separate calibration
 end
 
 %% options
@@ -66,7 +62,7 @@ opts.readout = 1; % readout dimension (1, 2 or 3)
 
 % circular convolution fills kspace all the way to the
 % edges so kspace doesn't need to be centered. however
-% it is slow. need a built-in 'circ' convn option.
+% it is slow. need built-in 'circ' convn option
 opts.conv = 'same'; % 'same' or 'circ'
 
 % varargin handling (must be option/value pairs)
@@ -83,33 +79,31 @@ end
 %% ky-kz convolution patterns
 
 if isa(opts.pattern,'cell')
-    opts.p = opts.pattern; % no error checks
+    pattern = opts.pattern; % no error checks
     opts.pattern = 0; % user defined pattern
 else
     switch opts.pattern
         case 1;
-            opts.p{1} = [1 0 1;0 0 0;1 0 1]; % diagonal
-            opts.p{2} = [0 1 0;1 0 1;0 1 0]; % crosses
+            pattern{1} = [1 0 1;0 0 0;1 0 1]; % diagonal
+            pattern{2} = [0 1 0;1 0 1;0 1 0]; % crosses
         case 2;
-            opts.p{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
-            opts.p{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
+            pattern{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
+            pattern{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
         case 3;
-            opts.p{1} = [1 1 1;0 0 0;1 1 1]; % y only
+            pattern{1} = [1 1 1 1 1;0 0 0 0 0;1 1 1 1 1]; % y only
         case 4;
-            opts.p{1} = [1 0 1;1 0 1;1 0 1]; % z only
-        case 5;
-            opts.p{1} = [0 1 0;1 0 1;0 1 0]; % yz checkerboard
+            pattern{1} = [1 0 1;1 0 1;1 0 1;1 0 1;1 0 1]; % z only
         otherwise;
             error('pattern not recognized');
     end
 end
 
 % make logical - catch any bad user defined patterns
-for k = 1:numel(opts.p)
-    if ~isnumeric(opts.p{k}) || ~ismatrix(opts.p{k})
+for k = 1:numel(pattern)
+    if ~isnumeric(pattern{k}) || ~ismatrix(pattern{k})
         error('pattern %k must be numeric matrix',k);
     end
-    opts.p{k} = logical(opts.p{k});
+    pattern{k} = logical(pattern{k});
 end
 
 %% initialize
@@ -179,11 +173,11 @@ if R>nc
 end
 
 % sampling pattern after each pass of reconstruction
-for j = 0:numel(opts.p)
+for j = 0:numel(pattern)
     if j==0
         yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
     else
-        s{j} = grappaconv(yz,opts.p{j})>=nnz(opts.p{j});
+        s{j} = grappaconv(yz,pattern{j})>=nnz(pattern{j});
         yz(s{j}) = 1; % we can now consider these lines sampled
     end
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
@@ -199,18 +193,19 @@ title(sprintf('%s (pattern=%i)',mfilename,opts.pattern));
 xlabel('kz'); ylabel('ky'); 
 
 subplot(1,3,2); im = sum(abs(ifft3(data)),4);
-[~,slice] = max(sum(reshape(im,[],nz))); % pick a slice with signal
+slice = round(nz/2); % pick a slice with signal
 imagesc(squeeze(im(slice,:,:))); title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 % needs to check for adequate kspace coverage
 if nnz(yz)/numel(yz) < 0.9
-    warning('inadequate coverage - check sampling patterns.')
+    warning('inadequate coverage - check patterns (could be partial Fourier?).')
 end
 
 %% see if gpu is possible
 
 try
+    xxx
     gpu = gpuDevice;
     data = gpuArray(data);
     mask = gpuArray(mask);
@@ -256,14 +251,14 @@ if nv<1
 end
 
 % detect ACS lines for each sampling pattern
-for j = 1:numel(opts.p)
+for j = 1:numel(pattern)
     
     % center point of the convolution
-    c{j} = ceil(size(opts.p{j})/2);
-    ind = sub2ind(size(opts.p{j}),c{j}(1),c{j}(2));
+    c{j} = ceil(size(pattern{j})/2);
+    ind = sub2ind(size(pattern{j}),c{j}(1),c{j}(2));
     
     % find patterns that satisfy acs sampling
-    a = opts.p{j}; a(ind) = 1; % center point (i.e. target)
+    a = pattern{j}; a(ind) = 1; % center point (i.e. target)
     acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, don't wrap
     na(j) =  numel(acs{j});
     
@@ -288,16 +283,16 @@ tic;
 % concatenate ky-kz to use indices (easier!)
 cal = reshape(cal,size(cal,1),[],nc);
 
-for j = 1:numel(opts.p)
+for j = 1:numel(pattern)
     
     % convolution matrix (compatible with convn)
-    A = zeros(nv,na(j),numel(opts.idx),nnz(opts.p{j}),nc,'like',data);
+    A = zeros(nv,na(j),numel(opts.idx),nnz(pattern{j}),nc,'like',data);
 
     % acs points in ky and kz
     [y z] = ind2sub(size(yz),acs{j});
     
     % offsets to neighbors in ky and kz
-    [dy dz] = ind2sub(size(opts.p{j}),find(opts.p{j}));
+    [dy dz] = ind2sub(size(pattern{j}),find(pattern{j}));
 
     % center the offsets
     dy = dy-c{j}(1); dz = dz-c{j}(2);
@@ -324,33 +319,33 @@ for j = 1:numel(opts.p)
     % linear solution X = pinv(A)*B
     [V S] = svd(A'*A); S = diag(S);
     if isempty(opts.tol)
-        tol = max(size(A))*eps(S(1)); % pinv default
+        tol = min(size(A))*eps(S(1));
     else
         tol = opts.tol;
     end
     invS = sqrt(S)./(S+tol); % tikhonov
     X = V*(invS.^2.*(V'*(A'*B)));
     clear A B V % reduce memory for next loop
-
+    
     % resize for convn and pad with zeros: extra work but easier
     X = reshape(X,numel(opts.idx),[],nc,nc);
     
-    Y{j} = zeros(numel(opts.idx),numel(opts.p{j}),nc,nc,'like',X);
+    Y{j} = zeros(numel(opts.idx),numel(pattern{j}),nc,nc,'like',X);
     for k = 1:nc
         for m = 1:nc
-            Y{j}(:,find(opts.p{j}),k,m) = X(:,:,k,m);
+            Y{j}(:,find(pattern{j}),k,m) = X(:,:,k,m);
         end
     end
-    Y{j} = reshape(Y{j},[numel(opts.idx) size(opts.p{j}) nc nc]);
+    Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
 
 end
-fprintf('SVD tolerance = %.2e (%.2f%%)\n',tol,100*tol/S(1));
+%fprintf('SVD tolerance = %.2e (%.4f%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc;
 
 %% GRAPPA recon in multiple passes
 tic;
 
-for j = 1:numel(opts.p)
+for j = 1:numel(pattern)
 
     ksp = data;
     
