@@ -31,11 +31,11 @@ function ksp = grappa3(data,mask,varargin)
 %
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
-% -mask is binary array [nx ny nz] or [ny nz]
+% -mask is binary array [nx ny nz] or [ny nz] or []
 % -varargin: pairs of options/values (e.g. 'pattern',2)
 %
 % Output:
-% -ksp is reconstructed kspace [nx ny nz nc] for each coil
+% -ksp is reconstructed kspace [nx ny nz nc] 
 %
 %% example dataset
 
@@ -60,9 +60,8 @@ opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % scalar 1-4 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
 
-% circular convolution fills kspace all the way to the
-% edges so kspace doesn't need to be centered. however
-% it is slow. need built-in 'circ' convn option
+% circular convolution fills kspace to the edges so
+% kspace doesn't need to be centered but it is slow
 opts.conv = 'same'; % 'same' or 'circ'
 
 % varargin handling (must be option/value pairs)
@@ -144,9 +143,6 @@ else
 end
 mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
 
-% non-sampled points must be zero
-data = bsxfun(@times,data,mask);
-
 % define the convolution function
 if isequal(opts.conv,'circ') && exist('cconvn.m','file')
     grappaconv = @(A,B)cconvn(A,B);
@@ -155,6 +151,9 @@ elseif isequal(opts.conv,'same')
 else
     error('convolution options are: ''circ'' or ''same''');
 end
+
+% non-sampled points *must* be zero
+data = bsxfun(@times,data,mask);
 
 %% detect sampling
 
@@ -277,7 +276,7 @@ for j = 1:numel(pattern)
 end
 
 %% GRAPPA calibration: linear equation AX=B
-tic;
+t = tic();
 
 % concatenate ky-kz to use indices (easier!)
 cal = reshape(cal,size(cal,1),[],nc);
@@ -339,10 +338,10 @@ for j = 1:numel(pattern)
 
 end
 fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
-fprintf('GRAPPA calibration: '); toc;
+fprintf('GRAPPA calibration: '); toc(t);
 
 %% GRAPPA recon in multiple passes
-tic;
+t = tic();
 
 for j = 1:numel(pattern)
 
@@ -365,7 +364,7 @@ for j = 1:numel(pattern)
     
 end
 
-fprintf('GRAPPA reconstruction: '); toc;
+fprintf('GRAPPA reconstruction: '); toc(t);
 
 % unswitch readout direction
 if opts.readout==2
