@@ -205,7 +205,6 @@ end
 %% see if gpu is possible
 
 try
-    xxx
     gpu = gpuDevice;
     data = gpuArray(data);
     mask = gpuArray(mask);
