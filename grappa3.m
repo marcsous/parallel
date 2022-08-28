@@ -322,8 +322,9 @@ for j = 1:numel(pattern)
         tol = opts.tol;
     end
     invS = sqrt(S)./(S+tol); % tikhonov
+    invS(~isfinite(invS.^2)) = 0;
     X = V*(invS.^2.*(V'*(A'*B)));
-    clear A B V % reduce memory for next loop
+    clear A B V invS % reduce memory for next loop
     
     % resize for convn and pad with zeros: extra work but easier
     X = reshape(X,numel(opts.idx),[],nc,nc);
@@ -337,7 +338,7 @@ for j = 1:numel(pattern)
     Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
 
 end
-fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
+fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/max(S));
 fprintf('GRAPPA calibration: '); toc(t);
 
 %% GRAPPA recon in multiple passes
