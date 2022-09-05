@@ -64,7 +64,7 @@ else
     kz = find(any(any(mask,1),2));
     
     if any(diff(kx)~=1) || any(diff(ky)~=1) || any(diff(kz)~=1)
-        error('kspace not centered or not contiguous');
+        warning('kspace not centered or not contiguous');
     end
     
     % fraction of sampling in kx, ky, kz
