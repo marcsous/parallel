@@ -55,6 +55,11 @@ if nc>1
         [image(:,:,:,c) phase(:,:,:,c)] = homodyne(kspace(:,:,:,c),varargin{:});
     end
     
+    sz = size(kspace); 
+    if opts.removeOS; sz(opts.removeOS) = sz(opts.removeOS)/2; end
+    image = reshape(image,sz);
+    phase = reshape(phase,sz);  
+    
 else
     
     % detect sampling
@@ -201,6 +206,8 @@ else
             case 3; ok = nz/4 + (1:nz/2);
                 image = image(:,:,ok,:);
                 phase = phase(:,:,ok,:);
+            otherwise
+                error('removeOS dimension not supported');
         end
         
     end
