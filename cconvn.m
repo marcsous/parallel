@@ -45,5 +45,5 @@ end
 B = zeros(size(A),'like',A);
 
 for k = 1:numel(v)
-    B = B + circshift(A,S(:,k)) * v(k);
+    B = B + circshift(A,S(:,k)) .* v(k);
 end

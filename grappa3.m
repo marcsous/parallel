@@ -27,6 +27,11 @@ function ksp = grappa3(data,mask,varargin)
 %                  x o x o            |1 0 1|
 %                  x o x o
 %
+% (5) 2x  crossed: x o x o  pattern = |0 1 0|
+%                  o x o x            |1 0 1|
+%                  x o x o            |0 1 0|
+%                  o x o x
+
 % Otherwise patterns may be passed by cell array (see below).
 %
 % Inputs:
@@ -40,7 +45,7 @@ function ksp = grappa3(data,mask,varargin)
 %% example dataset
 
 if nargin==0
-    % note: this doesn't look perfect... R=4 with 6coil is pushing it!
+    % note: this isn't perfect... R=4 with 6coil is pushing it!
     disp('Running example...')
     load phantom3D_6coil.mat
     data = fftshift(data); % center kspace
@@ -57,8 +62,9 @@ end
 opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
-opts.pattern = 1; % scalar 1-4 or cell array (see below)
+opts.pattern = 1; % scalar 1-5 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
+opts.gpu = 1; % use GPU (sometimes faster without)
 
 % circular convolution fills kspace to the edges so
 % kspace doesn't need to be centered but it is slow
@@ -82,16 +88,18 @@ if isa(opts.pattern,'cell')
     opts.pattern = 0; % user defined pattern
 else
     switch opts.pattern
-        case 1;
+        case 1; % 2x2
             pattern{1} = [1 0 1;0 0 0;1 0 1]; % diagonal
             pattern{2} = [0 1 0;1 0 1;0 1 0]; % crosses
-        case 2;
+        case 2; % 2x2
             pattern{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
             pattern{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
-        case 3;
-            pattern{1} = [1 1 1 1 1;0 0 0 0 0;1 1 1 1 1]; % y only
-        case 4;
-            pattern{1} = [1 0 1;1 0 1;1 0 1;1 0 1;1 0 1]; % z only
+        case 3; % 2x1
+            pattern{1} = [1 1 1;0 0 0;1 1 1]; % y only
+        case 4; % 1x2
+            pattern{1} = [1 0 1;1 0 1;1 0 1]; % z only
+        case 5; % 2
+            pattern{1} = [0 1 0;1 0 1;0 1 0]; % crosses 
         otherwise;
             error('pattern not recognized');
     end
@@ -169,6 +177,7 @@ if max(diff(kx))>1
 end
 if R>nc
     warning('Speed up greater than no. coils (%.1f vs %i)',R,nc);
+    if nc==1; error('Only 1 coil!'); end
 end
 
 % sampling pattern after each pass of reconstruction
@@ -197,13 +206,17 @@ imagesc(squeeze(im(slice,:,:))); title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 
 % needs to check for adequate kspace coverage
-if nnz(yz)/numel(yz) < 0.9
+if nnz(yz)/numel(yz) < 0.95
     warning('inadequate coverage - check patterns (could be partial Fourier?).')
+end
+if nnz(mask)/numel(mask) > 0.95
+    error('mask is %.1f %% nonzero.',100*nnz(mask)/numel(mask))
 end
 
 %% see if gpu is possible
 
 try
+    if ~opts.gpu; error('opts.gpu=0'); end
     gpu = gpuDevice;
     data = gpuArray(data);
     mask = gpuArray(mask);
@@ -317,7 +330,7 @@ for j = 1:numel(pattern)
     % linear solution X = pinv(A)*B
     [V S] = svd(A'*A); S = diag(S);
     if isempty(opts.tol)
-        tol = eps(max(S));
+        tol = eps(S(1));
     else
         tol = opts.tol;
     end
@@ -338,7 +351,7 @@ for j = 1:numel(pattern)
     Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
 
 end
-fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/max(S));
+fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc(t);
 
 %% GRAPPA recon in multiple passes
