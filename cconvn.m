@@ -1,4 +1,4 @@
-function C = cconvn2(A,B)
+function C = cconvn(A,B)
 
 % cconvn  N-dimensional circular convolution
 

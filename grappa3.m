@@ -48,13 +48,11 @@ if nargin==0
     % note: this isn't perfect... R=4 with 6coil is pushing it!
     disp('Running example...')
     load phantom3D_6coil.mat
-    data = fftshift(data); % center kspace
-    data(:,end,:,:) = []; % remove weird odd dimension
     mask = zeros(size(data,2),size(data,3));
     mask(1:2:end,1:2:end) = 1; % undersample 2x2
     mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
     varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
-    varargin{3} = 'cal'; varargin{4} = data(21:110,51:70,41:60,:);; % separate calibration
+    varargin{3} = 'cal'; varargin{4} = data(39:55,36:52,24:40,:);; % separate calibration
 end
 
 %% options
@@ -68,7 +66,7 @@ opts.gpu = 1; % use GPU (sometimes faster without)
 
 % circular convolution fills kspace to the edges so
 % kspace doesn't need to be centered but it is slow
-opts.conv = 'same'; % 'same' or 'circ'
+opts.conv = 'circ'; % 'same' or 'circ'
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
