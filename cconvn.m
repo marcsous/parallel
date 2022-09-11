@@ -5,7 +5,7 @@ function C = cconvn(A,B)
 sA = size(A);
 sB = size(B);
 
-% indices of wrapped endpoints
+% indices with wrapped endpoints
 for k = 1:numel(sA)
     if sA(k)==1 || k>numel(sB) || sB(k)==1
         s{k} = ':';
@@ -14,9 +14,6 @@ for k = 1:numel(sA)
     end
 end
 
-% pad array
-A = A(s{:});
-
-% convn valid
-C = convn(A,B,'valid');
+% pad array for convn valid
+C = convn(A(s{:}),B,'valid');
 
