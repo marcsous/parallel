@@ -64,10 +64,6 @@ opts.pattern = 1; % scalar 1-5 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
 opts.gpu = 1; % use GPU (sometimes faster without)
 
-% circular convolution fills kspace to the edges so
-% kspace doesn't need to be centered but it is slow
-opts.conv = 'circ'; % 'same' or 'circ'
-
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
     if k==numel(varargin) || ~ischar(varargin{k})
@@ -149,15 +145,6 @@ else
 end
 mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
 
-% define the convolution function
-if isequal(opts.conv,'circ') && exist('cconvn.m','file')
-    grappaconv = @(A,B)cconvn(A,B);
-elseif isequal(opts.conv,'same')
-    grappaconv = @(A,B)convn(A,B,'same'); % no 'circ' option
-else
-    error('convolution options are: ''circ'' or ''same''');
-end
-
 % non-sampled points *must* be zero
 data = bsxfun(@times,data,mask);
 
@@ -183,7 +170,7 @@ for j = 0:numel(pattern)
     if j==0
         yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
     else
-        s{j} = grappaconv(yz,pattern{j})>=nnz(pattern{j});
+        s{j} = cconvn(yz,pattern{j})>=nnz(pattern{j});
         yz(s{j}) = 1; % we can now consider these lines sampled
     end
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
@@ -268,7 +255,7 @@ for j = 1:numel(pattern)
     
     % find patterns that satisfy acs sampling
     a = pattern{j}; a(ind) = 1; % center point (i.e. target)
-    acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, don't wrap
+    acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, so don't use cconvn
     na(j) =  numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
@@ -364,7 +351,7 @@ for j = 1:numel(pattern)
         ksp_coil_m = ksp(:,:,:,m);
         
         for k = 1:nc
-            tmp = grappaconv(data(:,:,:,k),Y{j}(:,:,:,k,m));
+            tmp = cconvn(data(:,:,:,k),Y{j}(:,:,:,k,m));
             ksp_coil_m(:,s{j}) = ksp_coil_m(:,s{j})+tmp(:,s{j});
         end
 
