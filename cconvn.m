@@ -1,49 +1,32 @@
-function B = cconvn(A,K)
-%
-% Convolution of N-D array with kernel K.
-% Performs circular wrapping at edges.
-%
-% A is an N-D array
-% K is a kernel
+function C = cconvn2(A,B)
 
-% argument checks
-if nargin<1 || isempty(A)
-    error('something wrong with A');
-end
-if nargin<2 || isempty(K)
-    error('something wrong with K');
-end
+% cconvn  N-dimensional circular convolution
 
-% kernel properties
-sz = size(K);
-[i,~,v] = find(K(:)); % non-zeros
-nd = ndims(K)-iscolumn(K); % no. dimensions
+sA = size(A);
+sB = size(B);
 
-% bail out of unsupported cases
-for d = 1:nd
-    if sz(d)>size(A,d)
-        error('dimension %i of A is smaller than K - fix me',d);
+% indices of wrapped endpoints
+for k = 1:numel(sA)
+    if sA(k)==1 || k>numel(sB) || sB(k)==1
+        s{k} = ':';
+    else
+        s{k} = [sA(k)-ceil(sB(k)/2)+2:sA(k) 1:sA(k) 1:floor(sB(k)/2)];
     end
 end
 
-% shift indicies
-switch nd
-    case 1; [S(1,:)] = ind2sub(sz,i);
-    case 2; [S(1,:) S(2,:)] = ind2sub(sz,i);
-    case 3; [S(1,:) S(2,:) S(3,:)] = ind2sub(sz,i);
-    case 4; [S(1,:) S(2,:) S(3,:) S(4,:)] = ind2sub(sz,i);
-    case 5; [S(1,:) S(2,:) S(3,:) S(4,:) S(5,:)] = ind2sub(sz,i);      
-    otherwise; error('high dimensions not implemented - fix me');
+% pad array for 'valid'
+switch numel(sA)
+    case 1; A = A(s{1});
+    case 2; A = A(s{1},s{2});
+    case 3; A = A(s{1},s{2},s{3});
+    case 4; A = A(s{1},s{2},s{3},s{4});
+    case 5; A = A(s{1},s{2},s{3},s{4},s{5});
+    case 6; A = A(s{1},s{2},s{3},s{4},s{5},s{6});
+    case 7; A = A(s{1},s{2},s{3},s{4},s{5},s{6},s{7});
+    case 8; A = A(s{1},s{2},s{3},s{4},s{5},s{6},s{7},s{8});       
+    otherwise; error('high dimension not supported - fix me');
 end
 
-% center the convolution indices
-for d = 1:nd
-    S(d,:) = S(d,:)-fix(sz(d)/2)-1; 
-end
+% convn valid
+C = convn(A,B,'valid');
 
-% perform the convolution
-B = zeros(size(A),'like',A);
-
-for k = 1:numel(v)
-    B = B + circshift(A,S(:,k)) .* v(k);
-end
