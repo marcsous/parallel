@@ -40,7 +40,7 @@ for k = 1:2:numel(varargin)
         error('''varargin'' must be option/value pairs.');
     end
     if ~isfield(opts,varargin{k})
-        warning('''%s'' is not a valid option.',varargin{k});
+        error('''%s'' is not a valid option.',varargin{k});
     end
     opts.(varargin{k}) = varargin{k+1};
 end
