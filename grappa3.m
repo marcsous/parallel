@@ -52,7 +52,7 @@ if nargin==0
     mask(1:2:end,1:2:end) = 1; % undersample 2x2
     mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
     varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
-    varargin{3} = 'cal'; varargin{4} = data(39:55,36:52,24:40,:);; % separate calibration
+    varargin{3} = 'cal'; varargin{4} = data(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8),:); % separate calibration
 end
 
 %% options
@@ -80,6 +80,8 @@ end
 if isa(opts.pattern,'cell')
     pattern = opts.pattern; % no error checks
     opts.pattern = 0; % user defined pattern
+elseif ~isscalar(opts.pattern)
+    error('pattern must be scalar or cell array');
 else
     switch opts.pattern
         case 1; % 2x2
