@@ -182,17 +182,17 @@ A = reshape(A,nv*na,numel(idx)*numel(idy)*nc);
 B = reshape(B,nv*na,nc);
 
 % linear solution X = pinv(A)*B
-[V S] = svd(A'*A);
-S = sqrt(diag(S));
+[V S] = svd(A'*A); S = diag(S);
 if isempty(opts.tol)
-    tol = max(size(A))*eps(S(1)); % pinv default
+    tol = eps(S(1));
 else
     tol = opts.tol;
 end
-invS = S./(S.^2+tol^2); % tikhonov
+invS = sqrt(S)./(S+tol); % tikhonov
+invS(~isfinite(invS.^2)) = 0;
 X = V*(invS.^2.*(V'*(A'*B)));
 
-fprintf('SVD tolerance = %.2e (%.2f%%)\n',tol,100*tol/S(1));
+fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
 
 % reshape for convolution
 X = reshape(X,numel(idx),numel(idy),nc,nc);
@@ -207,7 +207,7 @@ for k = 1:R-1
     ksp(:,neq,:) = 0; % wipe any existing nonzeros
     for m = 1:nc
         for j = 1:nc
-            ksp(:,neq,m) = ksp(:,neq,m) + conv2(ksp(:,eq,j),X(:,:,j,m),'same');
+            ksp(:,neq,m) = ksp(:,neq,m) + cconvn(ksp(:,eq,j),X(:,:,j,m));
         end
     end
     eq = neq; % new lines are now existing lines

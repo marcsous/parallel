@@ -255,7 +255,7 @@ for j = 1:numel(pattern)
     
     % find patterns that satisfy acs sampling
     a = pattern{j}; a(ind) = 1; % center point (i.e. target)
-    acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, so don't use cconvn
+    acs{j} = find(convn(yz,a,'same')>=nnz(a)); % can't be sure ACS is symmetric, so can't use cconvn
     na(j) =  numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
