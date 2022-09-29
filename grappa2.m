@@ -11,19 +11,19 @@ function ksp = grappa2(data,mask,varargin)
 % -ksp is reconstructed kspace [nx ny nc] for each coil
 %
 % Notes:
-% -automatic detection of speedup factor and acs lines 
-% -best with center of kspace at center of the array
-% -use uniform outer line spacing and fully sampled acs
+% -automatic detection of speedup factor and acs lines
+% -assumes center of kspace is at the center of the array
+% -requires uniform outer line spacing and fully sampled acs
 %
 %% example dataset
 
 if nargin==0
     disp('Running example...')
     load phantom
-    data = fftshift(fft2(data));
-    mask = 1:2:256;
+    data = fftshift(fft2(data)); % centered k-space
+    mask = 1:2:256; % undersampling
     varargin{1} = 'cal';
-    varargin{2} = data(90:160,120:140,:);
+    varargin{2} = data(63:194,121:140,:);
 end
 
 %% options
@@ -171,8 +171,9 @@ end
 % convolution matrix (compatible with convn)
 A = zeros(nv,na,numel(idx),numel(idy),nc,'like',data);
 for j = 1:na
+    tmp = mod(acs(j)-idy+ny-1,ny)+1; % wrap
     for k = 1:numel(idx)
-        A(:,j,k,:,:) = cal(valid-idx(k),acs(j)-idy,:);
+        A(:,j,k,:,:) = cal(valid-idx(k),tmp,:);
     end
 end
 B = cal(valid,acs,:);
@@ -216,7 +217,7 @@ end
 % reinsert original data
 ksp(ro,pe,:) = data(ro,pe,:);
 
-%% handle partial Fourier sampling
+%% for partial Fourier sampling, zero out invalid lines
 
 if pe(1)>R || pe(end)<ny-R
     if pe(1)>R
@@ -240,7 +241,6 @@ if opts.readout==2
 end
 
 %% display
-
 if nargout==0
     im = abs(ifft2(fftshift(ksp)));
     imagesc(sum(im,3)); % magnitude image
