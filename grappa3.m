@@ -45,14 +45,15 @@ function ksp = grappa3(data,mask,varargin)
 %% example dataset
 
 if nargin==0
-    % note: this isn't perfect... R=4 with 6coil is pushing it!
     disp('Running example...')
+    % note: this isn't perfect... R=4 with 6coil is pushing it (dataset < 25Mb for github)  
     load phantom3D_6coil.mat
-    mask = zeros(size(data,2),size(data,3));
-    mask(1:2:end,1:2:end) = 1; % undersample 2x2
-    mask(3:4:end,:) = circshift(mask(3:4:end,:),[0 1]); % pattern 2
+    mask = zeros(size(data,1),size(data,2),size(data,3));
+    mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
     varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
     varargin{3} = 'cal'; varargin{4} = data(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8),:); % separate calibration
+    data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
 %% options
@@ -62,7 +63,7 @@ opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % scalar 1-5 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
-opts.gpu = 1; % use GPU (sometimes faster without)
+opts.gpu = 0; % use GPU (sometimes faster without)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -188,7 +189,7 @@ title(sprintf('%s (pattern=%i)',mfilename,opts.pattern));
 xlabel('kz'); ylabel('ky'); 
 
 subplot(1,3,2); im = sum(abs(ifft3(data)),4);
-slice = round(nz/2); % pick a slice with signal
+slice = round(nz/2+1); % the middle slice
 imagesc(squeeze(im(slice,:,:))); title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 

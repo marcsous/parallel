@@ -22,20 +22,19 @@ function ksp = sake3(data,varargin)
 
 if nargin==0
     disp('Running example...')
+    % note: this isn't perfect... R=4 with 6coil is pushing it (dataset < 25Mb for github)
     load phantom3D_6coil.mat
-    data = fftshift(data);
-    data(:,end,:,:) = []; % remove odd dimension
-    mask = false(128,120,96); % sampling mask
-    mask(:,1:2:end,1:2:end) = 1; % undersample
-    varargin = {'cal',data(:,51:70,41:60,:)}; % calibration
-    data = bsxfun(@times,data,mask); % clean up data
-    clearvars -except data varargin
+    mask = zeros(size(data,1),size(data,2),size(data,3));
+    mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
+    varargin{1} = 'cal'; varargin{2} = data(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8),:); % separate calibration
+    data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
 %% setup
 
 % default options
-opts.width = 4; % kernel width: [x y z] or scalar
+opts.width = 3; % kernel width: [x y z] or scalar
 opts.radial = 0; % use radial kernel [1 or 0]
 opts.loraks = 0; % phase constraint (loraks)
 opts.tol = 1e-6; % tolerance (fraction change in norm)
@@ -43,6 +42,8 @@ opts.maxit = 1e3; % maximum no. iterations
 opts.noise = []; % noise std, if available
 opts.center = []; % center of kspace, if available
 opts.cal = []; % separate calibration data, if available
+opts.gpu = 1; % use GPU (sometimes faster without)
+opts.sparsity = 1; % sparsity in wavelet domain (1=100%)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -50,7 +51,7 @@ for k = 1:2:numel(varargin)
         error('''varargin'' must be option/value pairs.');
     end
     if ~isfield(opts,varargin{k})
-        warning('''%s'' is not a valid option.',varargin{k});
+        error('''%s'' is not a valid option.',varargin{k});
     end
     opts.(varargin{k}) = varargin{k+1};
 end
@@ -68,6 +69,7 @@ if numel(opts.width)==1
 elseif numel(opts.width~=3)
     error('width must have 3 elements');
 end
+if nz==1; opts.width(3) = 1; end % for 2D case
 
 % convolution kernel indicies
 [x y z] = ndgrid(-ceil(opts.width(1)/2):ceil(opts.width(1)/2), ...
@@ -105,18 +107,30 @@ opts.flip.z = circshift(nz:-1:1,[0 2*opts.center(3)-1]);
 % estimate noise std (heuristic)
 if isempty(opts.noise)
     tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
-    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k); % trim 20%
+    k = floor(numel(tmp)/10); tmp = tmp(1+k:end-k); % trim 20%
     opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
 end
 noise_floor = opts.noise * sqrt(nnz(data)/nc);
+
+% set up DWT transform
+if opts.sparsity<1 && opts.sparsity>0
+    Q = DWT([nx ny nz],'db2');
+elseif opts.sparsity~=1
+    error('''sparsity'' must be between 0 and 1');
+end
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(data)/numel(data));
 
+if ~nnz(data) || ~isfinite(noise_floor)
+    error('data all zero or contains Inf/NaN');
+end
+
 %% see if gpu is possible
 
 try
+    if ~opts.gpu; error('GPU option set to off.'); end
     gpu = gpuDevice;
     if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b.'); end
     data = gpuArray(data);
@@ -131,7 +145,7 @@ end
 if ~isempty(opts.cal)
     
     if size(opts.cal,4)~=nc
-        error('Separate calibration data must have %i coils.',nc);
+        error('Calibration data has %i coils (data has %i).',size(opts.cal,4),nc);
     end
     if opts.loraks
         error('Separate calibration not compatible with loraks.');
@@ -153,6 +167,13 @@ for iter = 1:opts.maxit
 
     % data consistency
     ksp = ksp + bsxfun(@times,data-ksp,mask);
+    
+    % impose sparsity
+    if opts.sparsity<1
+        ksp = fft3(ksp);
+        ksp = Q.thresh(ksp,opts.sparsity);
+        ksp = ifft3(ksp);
+    end
     
     % normal calibration matrix
     AA = make_data_matrix(ksp,opts);
@@ -183,13 +204,13 @@ for iter = 1:opts.maxit
     end
     converged = sum(tol<opts.tol) > 10;
     
-    % display progress every 1 second
-    if iter==1 || toc(t) > 1 || converged
+    % display progress every 5 seconds
+    if iter==1 || toc(t) > 5 || converged
          if exist('t','var') && ~exist('itspersec','var')
             itspersec = (iter-1)/toc(t);
             fprintf('Iterations per second: %.2f\n',itspersec);
         end       
-        display(W,f,noise_floor,ksp,iter,tol,opts,norms,mask);
+        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts);
         t = tic();
     end
 
@@ -198,6 +219,7 @@ for iter = 1:opts.maxit
  
 end
 
+fprintf('Iterations performed: %i\n',iter);
 if nargout==0; clear; end % avoid dumping to screen
 
 %% make normal calibration matrix (low memory)
@@ -303,14 +325,10 @@ for j = 1:nk
 end
 
 % average
-if ~opts.loraks
-    ksp = ksp / nk;
-else
-    ksp = ksp / (2*nk);
-end
+ksp = ksp / nk / (1+opts.loraks);
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,tol,opts,norms,mask)
+function display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts)
 
 % plot singular values
 subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i',nnz(f))); 
@@ -328,16 +346,18 @@ if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
 subplot(1,4,2);
 tmp = squeeze(log(sum(abs(ksp(opts.center(1),:,:,:)),4)));
 imagesc(tmp); xlabel('kz'); ylabel('ky'); title('kspace');
+line(xlim,[opts.center(2) opts.center(2)]);
+line([opts.center(3) opts.center(3)],ylim);
 
 % show current image (center of x)
-subplot(1,4,3); slice = ceil(size(ksp,1)/2);
+subplot(1,4,3); slice = round(size(ksp,1)/2+1); % middle slice
 tmp = ifft(ksp); tmp = squeeze(tmp(slice,:,:,:));
 imagesc(sum(abs(ifft2(tmp)),3)); xlabel('z'); ylabel('y');
 title(sprintf('iter %i',iter));
 
 % plot change in metrics
 subplot(1,4,4);
-ax = plotyy(1:iter,norms(1,:),1:iter,1./norms(2,:));
-legend('||A||_*','||A||_F^{-1}'); axis(ax,'tight');
+ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:));
+legend('||A||_*','||A||_F'); axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
 drawnow;
