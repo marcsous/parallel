@@ -17,22 +17,22 @@ function ksp = grappa3(data,mask,varargin)
 %                  o o o o            |0 0 0|
 %                                     |0 1 0|
 %
-% (3) 2x1 regular: x x x x  pattern = |1 1 1|
+% (3) 2x1  y-only: x x x x  pattern = |1 1 1|
 %                  o o o o            |0 0 0|
 %                  x x x x            |1 1 1|
 %                  o o o o
 %
-% (4) 1x2 regular: x o x o  pattern = |1 0 1|
+% (4) 1x2  z-only: x o x o  pattern = |1 0 1|
 %                  x o x o            |1 0 1|
 %                  x o x o            |1 0 1|
 %                  x o x o
 %
-% (5) 2x  crossed: x o x o  pattern = |0 1 0|
+% (5) 2x  shifted: x o x o  pattern = |0 1 0|
 %                  o x o x            |1 0 1|
 %                  x o x o            |0 1 0|
 %                  o x o x
-
-% Otherwise patterns may be passed by cell array (see below).
+%
+% Custom patterns may be passed by cell array (see code).
 %
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
@@ -52,6 +52,7 @@ if nargin==0
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
     varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
+    %mask(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8)) = 1; % self calibration
     varargin{3} = 'cal'; varargin{4} = data(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
@@ -63,7 +64,7 @@ opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % scalar 1-5 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
-opts.gpu = 0; % use GPU (sometimes faster without)
+opts.gpu = 1; % use GPU (sometimes faster without)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -85,19 +86,19 @@ elseif ~isscalar(opts.pattern)
     error('pattern must be scalar or cell array');
 else
     switch opts.pattern
-        case 1; % 2x2
+        case 1 % 2x2
             pattern{1} = [1 0 1;0 0 0;1 0 1]; % diagonal
             pattern{2} = [0 1 0;1 0 1;0 1 0]; % crosses
-        case 2; % 2x2
+        case 2 % 2x2
             pattern{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; % diamond
             pattern{2} = [1 1 1;0 0 0;1 1 1]; % rectangle
-        case 3; % 2x1
+        case 3 % 2x1
             pattern{1} = [1 1 1;0 0 0;1 1 1]; % y only
-        case 4; % 1x2
+        case 4 % 1x2
             pattern{1} = [1 0 1;1 0 1;1 0 1]; % z only
-        case 5; % 2
+        case 5 % 2
             pattern{1} = [0 1 0;1 0 1;0 1 0]; % crosses 
-        otherwise;
+        otherwise
             error('pattern not recognized');
     end
 end
