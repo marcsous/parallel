@@ -6,6 +6,10 @@ function ksp = sake2(data,varargin)
 % Singular value filtering is done based on opts.noise
 % which is a key parameter that affects image quality.
 %
+% Conjugate symmetry requires the center of kspace to be
+% at the center of the array so that flip works correctly.
+% Same for separate calibration (but doesn't work well).
+%
 % Inputs:
 %  -data [nx ny nc]: 2D kspace data array from nc coils
 %  -varargin: pairs of options/values (e.g. 'radial',1)
@@ -14,42 +18,50 @@ function ksp = sake2(data,varargin)
 %  -ksp [nx ny nc]: 2D kspace data array from nc coils
 %
 % References:
-%  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %  -Shin PJ et al. SAKE. Magn Resonance Medicine 2014;72:959
+%  -Haldar JP et al. LORAKS. IEEE Trans Med Imag 2014;33:668
 %
 %% example dataset
 
 if nargin==0
     disp('Running example...')
-    load head.mat
+    load phantom.mat
+
+
+%     load phantom_32ch_7ech_1sl.mat
+%     data=data(:,:,1:3:end,:);
+%     %data=circshift(data,[2 0]);
+%     cal=data(:,85:108,:,1); % beyond echo 3 not good even for sake alone
+%     data=data(:,:,:,7);
+% data(109:end,:,:)=0;
+% 
+% varargin = {'cal',cal};
+
     data = fftshift(fft2(data));
     mask = false(256,256);
-    mask(:,1:3:256) = 1; % undersampling
-    mask(:,127:131) = 1; % self-cal
-    %cal = data(:,120:138,:); % separate calibation
-    %varargin = {'cal',cal};    
-    data = bsxfun(@times,data,mask); % clean
-    clearvars -except data varargin
+    mask(1:141,1:2:256) = 1; % undersampling (and partial kx)
+    mask(1:141,121:136) = 1; % self-calibration 
+    %varargin{1} = 'cal'; varargin{2} = data(:,121:136,:); % separate calibation
+    varargin{3} = 'loraks'; varargin{4} = 1; % assume conjugate symmetry
+    data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
-
 
 %% setup
 
 % default options
-opts.width = 5; % kernel width
-opts.radial = 0; % use radial kernel
-opts.loraks = 0; % phase constraint (loraks)
+opts.width = 4; % kernel width
+opts.radial = 1; % use radial kernel
+opts.loraks = 0; % conjugate coils (loraks)
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.noise = []; % noise std, if available
-opts.center = []; % center of kspace, if available
 opts.cal = []; % separate calibration data, if available
-opts.sparsity = 1; % compressed sensing sparsity (1=off)
-opts.wname = 'db2'; % wavelet type (db2=piecewise linear)
+opts.sparsity = 1; % sparsity in wavelet domain (1=100%)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
     if k==numel(varargin) || ~ischar(varargin{k})
+        if isempty(varargin{k}); continue; end
         error('''varargin'' must be option/value pairs.');
     end
     if ~isfield(opts,varargin{k})
@@ -78,21 +90,11 @@ opts.kernel.x = x(k);
 opts.kernel.y = y(k);
 opts.kernel.mask = k;
 
-% dimensions of the dataset
-opts.dims = [nx ny nc nk 1];
-if opts.loraks; opts.dims(5) = 2; end
-
 % estimate center of kspace
-if isempty(opts.center)
-    [~,k] = max(reshape(data,[],nc));
-    [x y] = ind2sub([nx ny],k);
-    opts.center(1) = gather(round(median(x)));
-    opts.center(2) = gather(round(median(y)));
-end
-
-% indices for conjugate reflection about center
-opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
-opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
+[~,k] = max(reshape(data,[],nc));
+[x y] = ind2sub([nx ny],k);
+opts.center(1) = gather(round(median(x)));
+opts.center(2) = gather(round(median(y)));
 
 % estimate noise std (heuristic)
 if isempty(opts.noise)
@@ -102,8 +104,27 @@ if isempty(opts.noise)
 end
 noise_floor = opts.noise * sqrt(nnz(data)/nc);
 
+% conjugate symmetric coils
+if opts.loraks
+    nc = 2*nc;
+    data = cat(3,data,conj(flip(flip(data,1),2)));
+    if ~isempty(opts.cal)
+        opts.cal = cat(3,opts.cal,conj(flip(flip(opts.cal,1),2)));
+    end
+end
+
+% dimensions of the dataset
+opts.dims = [nx ny nc nk];
+
+% set up DWT transform
+if opts.sparsity<1 && opts.sparsity>0
+    Q = DWT([nx ny],'db2'); % [nx ny] or [nx ny nc]?
+elseif opts.sparsity~=1
+    error('''sparsity'' must be between 0 and 1');
+end
+
 % display
-disp(rmfield(opts,{'flip','kernel'}));
+disp(rmfield(opts,{'kernel'}));
 fprintf('Density = %f\n',nnz(data)/numel(data));
 
 %% see if gpu is possible
@@ -121,40 +142,34 @@ end
 %% separate calibration data
 
 if ~isempty(opts.cal)
-    
+
     if size(opts.cal,3)~=nc
-        error('Separate calibration data must have %i coils.',nc);
+        error('Calibration data has %i coils (data has %i).',size(opts.cal,3),nc);
     end
-    if opts.loraks
-        error('Separate calibration not compatible with loraks.');
-    end
-    
+
     cal = cast(opts.cal,'like',data);
     A = make_data_matrix(cal,opts);
-    [V,~] = svd(A'*A); % rowspace
-    
-else
-    
-    A = make_data_matrix(data,opts);
-    ok = all(A,2); % complete rows
-    if nnz(ok)
-        [~,~,V] = svd(A(ok,:));
-    else
-        V = 1; % there is nothing
-    end
+    [V,~] = svd(A'*A);
 
 end
 
 %% Cadzow algorithm
 
-mask = any(data,3); % sampling mask
+mask = data ~= 0; % sampling mask
 ksp = zeros(size(data),'like',data);
 
 for iter = 1:opts.maxit
-    
+
     % data consistency
-    ksp = ksp + bsxfun(@times,data-ksp,mask);
-       
+    ksp = ksp + (data-ksp).*mask;
+
+    % sparsity
+    if opts.sparsity<1
+        ksp = fft2(ksp); % to image
+        ksp = Q.thresh(ksp,opts.sparsity);
+        ksp = ifft2(ksp); % to kspace
+    end
+
     % calibration matrix
     A = make_data_matrix(ksp,opts);
 
@@ -166,16 +181,16 @@ for iter = 1:opts.maxit
         W = svd(A'*A);
     end
     W = sqrt(gather(W));
-    
+
     % minimum variance filter
     f = max(0,1-noise_floor.^2./W.^2);
-    A = A * (V * diag(f) * V');   
-    
-    % hankel structure (average along anti-diagonals)   
+    A = A * (V * diag(f) * V');
+
+    % hankel structure (average along anti-diagonals)
     ksp = undo_data_matrix(A,opts);
 
     % check convergence (fractional change in Frobenius norm)
-    norms(1,iter) = norm(W,1); % nuclear norm 
+    norms(1,iter) = norm(W,1); % nuclear norm
     norms(2,iter) = norm(W,2); % Frobenius norm
     if iter==1
         tol(iter) = opts.tol;
@@ -189,8 +204,8 @@ for iter = 1:opts.maxit
          if exist('t','var') && ~exist('itspersec','var')
             itspersec = (iter-1)/toc(t);
             fprintf('Iterations per second: %.1f\n',itspersec);
-        end       
-        display(W,f,noise_floor,ksp,iter,tol,norms,mask);
+        end
+        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts);
         t = tic();
     end
 
@@ -217,11 +232,7 @@ for k = 1:nk
     A(:,:,:,k) = circshift(data,[x y]);
 end
 
-if opts.loraks
-    A = cat(5,A,conj(A(opts.flip.x,opts.flip.y,:,:)));
-end
-
-A = reshape(A,nx*ny,[]);
+A = reshape(A,nx*ny,nc*nk);
 
 %% undo data matrix
 function data = undo_data_matrix(A,opts)
@@ -231,11 +242,7 @@ ny = opts.dims(2);
 nc = opts.dims(3);
 nk = opts.dims(4);
 
-A = reshape(A,nx,ny,nc,nk,[]);
-
-if opts.loraks
-    A(opts.flip.x,opts.flip.y,:,:,2) = conj(A(:,:,:,:,2));
-end
+A = reshape(A,nx,ny,nc,nk);
 
 for k = 1:nk
     x = opts.kernel.x(k);
@@ -243,19 +250,22 @@ for k = 1:nk
     A(:,:,:,k,:) = circshift(A(:,:,:,k,:),-[x y]);
 end
 
-data = mean(reshape(A,nx,ny,nc,[]),4);
+data = mean(A,4);
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,tol,norms,mask)
+function display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts)
 
 % plot singular values
-subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f))); 
+subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
 line(xlim,gather([1 1]*noise_floor/W(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % mask on iter=1 to show the blackness of kspace
-if iter==1; ksp = bsxfun(@times,ksp,mask); end
+if iter==1
+    ksp = ksp .* mask; 
+    if opts.loraks; ksp = ksp(:,:,1:size(ksp,3)/2); end
+end
 
 % prefer ims over imagesc
 if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
@@ -263,6 +273,8 @@ if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
 % show current kspace
 subplot(1,4,2); imagesc(log(sum(abs(ksp),3)));
 xlabel('dim 2'); ylabel('dim 1'); title('kspace');
+line(xlim,[opts.center(1) opts.center(1)]);
+line([opts.center(2) opts.center(2)],ylim);
 
 % show current image
 subplot(1,4,3); imagesc(sum(abs(ifft2(ksp)),3));
@@ -271,6 +283,6 @@ xlabel('dim 2'); ylabel('dim 1'); title(sprintf('iter %i',iter));
 % plot change in metrics
 subplot(1,4,4);
 ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:));
-legend('||A||_*','||A||_F'); axis(ax,'tight');
+legend('||A||_*','||A||_F');axis(ax,'tight');
 xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
 drawnow;
