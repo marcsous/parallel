@@ -36,7 +36,7 @@ function ksp = grappa3(data,mask,varargin)
 %
 % Inputs:
 % -data is kspace [nx ny nz nc] with zeros in empty lines
-% -mask is binary array [nx ny nz] or [ny nz] or []
+% -mask is binary array [nx ny nz] or [ny nz] or [] (auto)
 % -varargin: pairs of options/values (e.g. 'pattern',2)
 %
 % Output:
@@ -52,8 +52,8 @@ if nargin==0
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
     varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
-    %mask(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8)) = 1; % self calibration
-    varargin{3} = 'cal'; varargin{4} = data(size(data,1)/2+(-8:8),size(data,2)/2+(-8:8),size(data,3)/2+(-8:8),:); % separate calibration
+    %mask(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
+    varargin{3} = 'cal'; varargin{4} = data(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -64,7 +64,7 @@ opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
 opts.pattern = 1; % scalar 1-5 or cell array (see below)
 opts.readout = 1; % readout dimension (1, 2 or 3)
-opts.gpu = 1; % use GPU (sometimes faster without)
+opts.gpu = 0; % use GPU (sometimes faster without)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -122,9 +122,11 @@ end
 if opts.readout==2
     data = permute(data,[2 1 3 4]);
     if exist('mask','var'); mask = permute(mask,[2 1 3 4]); end
+    if isfield(opts,'cal'); opts.cal = permute(opts.cal,[2 1 3 4]); end
 elseif opts.readout==3
     data = permute(data,[3 2 1 4]);
     if exist('mask','var'); mask = permute(mask,[3 2 1 4]); end
+    if isfield(opts,'cal'); opts.cal = permute(opts.cal,[3 2 1 4]); end
 elseif opts.readout~=1
     error('readout dimension must be 1, 2 or 3');
 end
@@ -147,9 +149,9 @@ else
         error('Argument ''mask'' size incompatible with data size.')
     end
 end
-mask = reshape(mask>0,nx,ny,nz); % ensure size/class compatibility
+mask = reshape(mask~=0,nx,ny,nz); % ensure size/class compatibility
 
-% non-sampled points *must* be zero
+% non-sampled points must be zero
 data = bsxfun(@times,data,mask);
 
 %% detect sampling
@@ -165,7 +167,7 @@ if max(diff(kx))>1
     error('Sampling must be contiguous in kx-direction.')
 end
 if R>nc
-    warning('Speed up greater than no. coils (%.1f vs %i)',R,nc);
+    warning('Speed up greater than no. coils (%.2f vs %i)',R,nc);
     if nc==1; error('Only 1 coil!'); end
 end
 
@@ -295,18 +297,19 @@ for j = 1:numel(pattern)
     [dy dz] = ind2sub(size(pattern{j}),find(pattern{j}));
 
     % center the offsets
-    dy = dy-c{j}(1); dz = dz-c{j}(2);
+    dy = dy-c{j}(1);
+    dz = dz-c{j}(2);
     
     % convolution matrix
     for k = 1:na(j)
 
-        % neighbors in ky and kz as indices
+        % neighbors in ky and kz (as indices)
         wrapy = mod(y(k)-dy+size(yz,1)-1,size(yz,1))+1;
         wrapz = mod(z(k)-dz+size(yz,2)-1,size(yz,2))+1;
-        idy = sub2ind(size(yz),wrapy,wrapz);
+        idyz = sub2ind(size(yz),wrapy,wrapz);
         
         for m = 1:numel(opts.idx)
-            A(:,k,m,:,:) = cal(valid-opts.idx(m),idy,:);
+            A(:,k,m,:,:) = cal(valid-opts.idx(m),idyz,:);
         end
         
     end

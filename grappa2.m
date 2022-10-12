@@ -3,8 +3,8 @@ function ksp = grappa2(data,mask,varargin)
 % Implementation of GRAPPA for 2D images (y-direction).
 %
 % Inputs:
-% -data is kspace [nx ny nc] with zeros in empty lines
-% -mask is binary array [nx ny] or can be linear indices
+% -data is kspace [nx ny nc] with zeros in the empty lines
+% -mask is binary array [nx ny] or can be vector of indices
 % -varargin: pairs of options/values (e.g. 'width',3)
 %
 % Output:
@@ -20,10 +20,10 @@ function ksp = grappa2(data,mask,varargin)
 if nargin==0
     disp('Running example...')
     load phantom
-    data = fftshift(fft2(data)); % centered k-space
-    mask = 1:2:256; % undersampling
-    varargin{1} = 'cal';
-    varargin{2} = data(63:194,121:140,:);
+    data = fftshift(fft2(data)); % center k-space
+    mask = 1:2:256; % undersampling (indices)
+    %mask = union(mask,121:140); % self-calibration 
+    varargin = {'cal',data(63:194,121:140,:)}; % separate calibration
 end
 
 %% options
@@ -55,7 +55,10 @@ end
 % switch readout direction
 if opts.readout==2
     data = permute(data,[2 1 3]);
-    if exist('mask','var'); mask = permute(mask,[2 1 3]); end
+    if exist('mask','var'); mask = permute(mask,[2 1 3]); end    
+    if isfield(opts,'cal'); opts.cal = permute(opts.cal,[2 1 3]); end
+elseif opts.readout~=1
+    error('Option ''readout'' must be 1 or 2.');
 end
 [nx ny nc] = size(data);
 
@@ -69,7 +72,7 @@ elseif isvector(mask)
     end
     mask = repmat(reshape(mask,1,ny),nx,1);
 end
-mask = reshape(mask>0,nx,ny); % size/class compatible
+mask = reshape(mask~=0,nx,ny); % size/class compatible
 
 % non-sampled points must be zero
 data = bsxfun(@times,data,mask);
@@ -84,7 +87,7 @@ for R = 1:nc+1
     eq = pe(1):R:pe(end); % equal spaced
     if all(ismember(eq,pe)); break; end
 end
-if R>nc; warning('Sampling pattern in ky not supported.'); end
+if R>nc; error('Sampling in ky not equal spaced (or too wide).'); end
 
 % indices of sampled readout points
 ro = find(any(mask,2));
@@ -95,14 +98,14 @@ if any(diff(ro)>1)
 end
 
 % display
-fprintf('Line spacing R = %i (speedup %.1f)\n',R,ny/numel(pe));
+fprintf('Line spacing R = %i (speedup %.2f)\n',R,ny/numel(pe));
 fprintf('Phase encodes = %i (out of %i)\n',numel(pe),ny);
 fprintf('Readout points = %i (out of %i)\n',numel(ro),nx);
 fprintf('Number of coils = %i\n',nc);
 
 %% GRAPPA kernel and acs
 
-% offset indices for the kernel (ky)
+% indices for the kernel (ky)
 for k = 1:opts.width
     idy(k) = 1+power(-1,k-1)*floor(k/2)*R;
 end
@@ -116,7 +119,7 @@ if isempty(opts.cal)
     % data is self-calibrated
     cal = data;
     
-    % detect ACS lines
+    % detect ACS lines (no wrap)
     acs = [];
     for j = 1:numel(pe)
         if all(ismember(pe(j)-idy,pe))
@@ -124,7 +127,7 @@ if isempty(opts.cal)
         end
     end
     
-    % valid points along kx
+    % valid points along kx (no wrap)
     valid = ro(1)+max(idx):ro(end)+min(idx);
 
 else
@@ -156,7 +159,7 @@ if nv<1
     error('Not enough ACS points in kx (%i)',nv);
 end
 if na<1
-    error('ACS lines = none')
+    error('Not enough ACS lines in ky (%i)',na);
 else
     fprintf('ACS region = [%i x %i] ',nv,na);
     if isempty(opts.cal)
@@ -171,9 +174,8 @@ end
 % convolution matrix (compatible with convn)
 A = zeros(nv,na,numel(idx),numel(idy),nc,'like',data);
 for j = 1:na
-    tmp = mod(acs(j)-idy+ny-1,ny)+1; % wrap
     for k = 1:numel(idx)
-        A(:,j,k,:,:) = cal(valid-idx(k),tmp,:);
+        A(:,j,k,:,:) = cal(valid-idx(k),acs(j)-idy,:);
     end
 end
 B = cal(valid,acs,:);
@@ -205,24 +207,23 @@ ksp = data;
 
 for k = 1:R-1
     neq = mod(eq,ny)+1; % new lines to reconstruct
-    ksp(:,neq,:) = 0; % wipe any existing nonzeros
+    ksp(:,neq,:) = 0; % wipe any nonzero data
     for m = 1:nc
         for j = 1:nc
             ksp(:,neq,m) = ksp(:,neq,m) + cconvn(ksp(:,eq,j),X(:,:,j,m));
         end
     end
-    eq = neq; % new lines are now existing lines
+    eq = neq; % new lines are now existing
+    %ksp(:,pe,:) = data(:,pe,:); % reinsert original data (optional)
 end
-
-% reinsert original data
-ksp(ro,pe,:) = data(ro,pe,:);
 
 %% for partial Fourier sampling, zero out invalid lines
 
 if pe(1)>R || pe(end)<ny-R
     if pe(1)>R
         ksp(:,1:pe(1)-1,:) = 0;
-    else
+    end
+    if pe(end)<ny-R
         ksp(:,pe(end)+1:end,:) = 0;
     end
     warning('partial ky detected (range %i-%i).',pe(1),pe(end));
@@ -230,7 +231,8 @@ end
 if ro(1)>R || ro(end)<nx-R
     if ro(1)>R
         ksp(1:ro(1)-1,:,:) = 0;
-    else
+    end
+    if ro(end)<nx-R
         ksp(ro(end)+1:end,:,:) = 0;
     end
     warning('partial kx detected (range %i-%i).',ro(1),ro(end));
@@ -242,9 +244,8 @@ end
 
 %% display
 if nargout==0
-    im = abs(ifft2(fftshift(ksp)));
-    imagesc(sum(im,3)); % magnitude image
+    subplot(1,2,1); im = abs(ifft2(fftshift(data))); imagesc(sum(im,3));
+    subplot(1,2,2); im = abs(ifft2(fftshift(ksp))); imagesc(sum(im,3));
     title(sprintf('%s (R=%i)',mfilename,R));
     clear % avoid dumping to screen
 end
-
