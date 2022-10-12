@@ -193,7 +193,7 @@ title(sprintf('%s (pattern=%i)',mfilename,opts.pattern));
 xlabel('kz'); ylabel('ky'); 
 
 subplot(1,3,2); im = sum(abs(ifft3(data)),4);
-slice = round(nz/2+1); % the middle slice
+slice = floor(nx/2+1); % the middle slice in x
 imagesc(squeeze(im(slice,:,:))); title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
 

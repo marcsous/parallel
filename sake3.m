@@ -319,7 +319,7 @@ line(xlim,[opts.center(2) opts.center(2)]);
 line([opts.center(3) opts.center(3)],ylim);
 
 % show current image (center of x)
-subplot(1,4,3); slice = round(size(ksp,1)/2+1); % middle slice
+subplot(1,4,3); slice = floor(size(ksp,1)/2+1); % middle slice in x
 tmp = ifft(ksp); tmp = squeeze(tmp(slice,:,:,:));
 imagesc(sum(abs(ifft2(tmp)),3)); xlabel('z'); ylabel('y');
 title(sprintf('iter %i',iter));
