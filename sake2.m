@@ -26,17 +26,6 @@ function ksp = sake2(data,varargin)
 if nargin==0
     disp('Running example...')
     load phantom.mat
-
-
-%     load phantom_32ch_7ech_1sl.mat
-%     data=data(:,:,1:3:end,:);
-%     %data=circshift(data,[2 0]);
-%     cal=data(:,85:108,:,1); % beyond echo 3 not good even for sake alone
-%     data=data(:,:,:,7);
-% data(109:end,:,:)=0;
-% 
-% varargin = {'cal',cal};
-
     data = fftshift(fft2(data));
     mask = false(256,256);
     mask(1:141,1:2:256) = 1; % undersampling (and partial kx)
@@ -73,8 +62,8 @@ end
 %% initialize
 
 % argument checks
-if ndims(data)<2 || ndims(data)>3 || ~isfloat(data)
-    error('''data'' must be a 3d float array.')
+if ndims(data)<2 || ndims(data)>3 || ~isfloat(data) || isreal(data)
+    error('''data'' must be a 3d complex float array.')
 end
 [nx ny nc] = size(data);
 
@@ -108,10 +97,9 @@ noise_floor = opts.noise * sqrt(nnz(data)/nc);
 if opts.loraks
     nc = 2*nc;
     data = cat(3,data,conj(flip(flip(data,1),2)));
-    if ~isempty(opts.cal)
-        opts.cal = cat(3,opts.cal,conj(flip(flip(opts.cal,1),2)));
-    end
+    opts.cal = cat(3,opts.cal,conj(flip(flip(opts.cal,1),2)));
 end
+if isempty(opts.cal); opts.cal = []; end
 
 % dimensions of the dataset
 opts.dims = [nx ny nc nk];

@@ -69,6 +69,7 @@ opts.gpu = 0; % use GPU (sometimes faster without)
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
     if k==numel(varargin) || ~ischar(varargin{k})
+        if isempty(varargin{k}); continue; end
         error('''varargin'' must be option/value pairs.');
     end
     if ~isfield(opts,varargin{k})
@@ -114,8 +115,8 @@ end
 %% initialize
 
 % argument checks
-if ndims(data)<3 || ndims(data)>4
-    error('Argument ''data'' must be a 4d array.')
+if ndims(data)<3 || ndims(data)>4 || ~isfloat(data) || isreal(data)
+    error('Argument ''data'' must be a 4d complex float array.')
 end
 
 % switch readout direction

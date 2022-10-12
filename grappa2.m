@@ -22,8 +22,8 @@ if nargin==0
     load phantom
     data = fftshift(fft2(data)); % center k-space
     mask = 1:2:256; % undersampling (indices)
-    %mask = union(mask,121:140); % self-calibration 
-    varargin = {'cal',data(63:194,121:140,:)}; % separate calibration
+    %mask = union(mask,121:136); % self-calibration 
+    varargin = {'cal',data(63:194,121:136,:)}; % separate calibration
 end
 
 %% options
@@ -37,6 +37,7 @@ opts.readout = 1; % readout dimension (default=1)
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
     if k==numel(varargin) || ~ischar(varargin{k})
+        if isempty(varargin{k}); continue; end
         error('''varargin'' must be option/value pairs.');
     end
     if ~isfield(opts,varargin{k})
@@ -48,8 +49,8 @@ end
 %% initialize
 
 % argument checks
-if ndims(data)<2 || ndims(data)>3
-    error('Argument ''data'' must be a 3d array.')
+if ndims(data)<2 || ndims(data)>3 || ~isfloat(data) || isreal(data)
+    error('Argument ''data'' must be a 3d complex float array.')
 end
 
 % switch readout direction
