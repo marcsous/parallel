@@ -16,11 +16,15 @@ classdef DWT
     %   Q = DWT(size(x),'db2');
     %   y = Q * x; % forward
     %   z = Q'* y; % inverse
-    %   norm(x-z)
-    %     ans = 7.5179e-13
-    %   z = Q.thresh(x,0.1); % 10% zeros
-    %   norm(x-z)
-    %     ans = 
+    %   norm(x-z,Inf)
+    %     ans = 2.3395e-12
+    %   z = Q.thresh(x,0.3); % 30% zeros
+    %   norm(x-z,Inf)
+    %     ans = 0.1069
+    %   [x;z]
+    %     ans =
+    %       0.9898    1.9759    3.0319    4.0313    4.9135    5.9970    6.9835    8.0628
+    %       0.9611    1.9924    2.9702    3.9353    4.9038    5.9427    6.9627    7.9558
    
     properties (SetAccess = private)
         sizeINI
