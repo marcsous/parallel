@@ -3,7 +3,7 @@ function ksp = sake2(data,varargin)
 %
 % 2D MRI reconstruction based on matrix completion.
 %
-% Singular value filtering is done based on opts.noise
+% Singular value filtering is done based on opts.std
 % which is a key parameter that affects image quality.
 %
 % Conjugate symmetry requires the center of kspace to be
@@ -31,7 +31,7 @@ if nargin==0
     mask(1:141,1:2:256) = 1; % undersampling (and partial kx)
     mask(1:141,121:136) = 1; % self-calibration 
     %varargin{1} = 'cal'; varargin{2} = data(:,121:136,:); % separate calibation
-    varargin{3} = 'loraks'; varargin{4} = 1; % assume conjugate symmetry
+    varargin{3} = 'loraks'; varargin{4} = 1; % allow conjugate symmetry
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -43,9 +43,9 @@ opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
-opts.noise = []; % noise std, if available
+opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
-opts.sparsity = 1; % sparsity in wavelet domain (1=100%)
+opts.sparsity = 0; % sparsity in wavelet domain (0.1=10% zeros)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -86,12 +86,12 @@ opts.center(1) = gather(round(median(x)));
 opts.center(2) = gather(round(median(y)));
 
 % estimate noise std (heuristic)
-if isempty(opts.noise)
+if isempty(opts.std)
     tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
-    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k); % trim 20%
-    opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
+    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k+1); % trim 20%
+    opts.std = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
 end
-noise_floor = opts.noise * sqrt(nnz(data)/nc);
+noise_floor = opts.std * sqrt(nnz(data)/nc);
 
 % conjugate symmetric coils
 if opts.loraks
@@ -104,12 +104,8 @@ if isempty(opts.cal); opts.cal = []; end
 % dimensions of the dataset
 opts.dims = [nx ny nc nk];
 
-% set up DWT transform
-if opts.sparsity<1 && opts.sparsity>0
-    Q = DWT([nx ny],'db2'); % [nx ny] or [nx ny nc]?
-elseif opts.sparsity~=1
-    error('''sparsity'' must be between 0 and 1');
-end
+% set up DWT transform: [nx ny] or [nx ny nc]?
+if opts.sparsity; Q = DWT([nx ny],'db2'); end
 
 % display
 disp(rmfield(opts,{'kernel'}));
@@ -152,7 +148,7 @@ for iter = 1:opts.maxit
     ksp = ksp + (data-ksp).*mask;
 
     % sparsity
-    if opts.sparsity<1
+    if opts.sparsity
         ksp = fft2(ksp); % to image
         ksp = Q.thresh(ksp,opts.sparsity);
         ksp = ifft2(ksp); % to kspace

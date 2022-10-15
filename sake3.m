@@ -4,7 +4,7 @@ function ksp = sake3(data,varargin)
 % 3D MRI reconstruction based on matrix completion.
 % Low memory version does not form matrix but is slow.
 %
-% Singular value filtering is done based on opts.noise
+% Singular value filtering is done based on opts.std
 % which is a key parameter that affects image quality.
 %
 % Conjugate symmetry requires center of kspace at the
@@ -43,10 +43,10 @@ opts.radial = 1; % use radial kernel [1 or 0]
 opts.loraks = 1; % phase constraint (loraks)
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
-opts.noise = []; % noise std, if available
+opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
-opts.gpu = 1; % use GPU (sometimes faster without)
-opts.sparsity = 1; % sparsity in wavelet domain (1=100%)
+opts.gpu = 1; % use GPU, if available (often faster without)
+opts.sparsity = 0.1; % sparsity in wavelet domain (0.1=10% zeros)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -98,12 +98,12 @@ opts.center(2) = gather(round(median(y)));
 opts.center(3) = gather(round(median(z)));
 
 % estimate noise std (heuristic)
-if isempty(opts.noise)
+if isempty(opts.std)
     tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
-    k = floor(numel(tmp)/10); tmp = tmp(1+k:end-k); % trim 20%
-    opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
+    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k+1); % trim 20%
+    opts.std = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
 end
-noise_floor = opts.noise * sqrt(nnz(data)/nc);
+noise_floor = opts.std * sqrt(nnz(data)/nc);
 
 % conjugate symmetric coils
 if opts.loraks
@@ -116,12 +116,8 @@ if isempty(opts.cal); opts.cal = []; end
 % dimensions of the data set
 opts.dims = [nx ny nz nc nk];
 
-% set up DWT transform
-if opts.sparsity<1 && opts.sparsity>0
-    Q = DWT([nx ny nz],'db2');
-elseif opts.sparsity~=1
-    error('''sparsity'' must be between 0 and 1');
-end
+% set up DWT transform: [nx ny nz] or [nx ny nz nc]?
+if opts.sparsity; Q = DWT([nx ny nz],'db2'); end
 
 % display
 disp(rmfield(opts,{'kernel'}));
@@ -169,10 +165,10 @@ for iter = 1:opts.maxit
     ksp = ksp + bsxfun(@times,data-ksp,mask);
     
     % impose sparsity
-    if opts.sparsity<1
-        ksp = fft3(ksp);
+    if opts.sparsity
+        ksp = fft3(ksp); % to image
         ksp = Q.thresh(ksp,opts.sparsity);
-        ksp = ifft3(ksp);
+        ksp = ifft3(ksp); % to kspace
     end
     
     % normal calibration matrix
