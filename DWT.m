@@ -5,20 +5,22 @@ classdef DWT
     % basically it takes care of the junk behind the
     % scenes so that dwt/idwt is as easy as fft/ifft
     %
-    % note:
+    % notes:
     % -always assumes periodic boundary conditions
-    % -lax about input shape (vectorized ok) for pcg
+    % -relaxed about input shape (vectorized ok) for pcg
+    % -to threshold use Q.thresh(x,sparsity) to do soft
+    %  thresholding to a given sparsity (0.3=>30% zeros)
     %
-    % Example
-    %   x = rand(1,8,'single');
-    %   W = DWT(size(x),'db2');
-    %   y = W * x; % forward
-    %   z = W'* y; % inverse
+    % Example:
+    %   x = (1:8) + 0.1*randn(1,8,'double');
+    %   Q = DWT(size(x),'db2');
+    %   y = Q * x; % forward
+    %   z = Q'* y; % inverse
     %   norm(x-z)
-    %     ans = 1.0431e-07
-    %
-    %  -to threshold use W.thresh(x,sparsity) to do
-    %   soft-thresholding to a given sparsity
+    %     ans = 7.5179e-13
+    %   z = Q.thresh(x,0.1); % 10% zeros
+    %   norm(x-z)
+    %     ans = 
    
     properties (SetAccess = private)
         sizeINI
@@ -152,11 +154,12 @@ classdef DWT
         function y = thresh(obj,x,sparsity)
             
             if ~exist('sparsity','var')
-                sparsity = 0.5; % default
-            elseif ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<0 || sparsity>1
+                sparsity = 0.25; % default
+            elseif ~isscalar(sparsity) || ~isreal(sparsity) || ~isnumeric(sparsity) || sparsity<0 || sparsity>1
                 error('sparsity must be a scalar between 0 and 1')
             end
             
+            % to wavelet domain
             y = obj * x;
 
             % no. coils
@@ -167,15 +170,18 @@ classdef DWT
 
             % soft-threshold to a target sparsity
             tmp = abs(y);
-            [~,ok] = sort(tmp,'descend');
-            k = ceil(size(y,1) * sparsity);
+            [~,ok] = sort(tmp,'ascend');
+            k = round(size(y,1) * sparsity);
 
-            for c = 1:nc
-                %y(ok(k:end,c),c) = 0; % hard threshold
-                thresh = tmp(ok(k,c),c); % soft threshold
-                y(:,c) = max(0,tmp(:,c)-thresh).*sign(y(:,c));
+            if k>0
+                for c = 1:nc
+                    %y(ok(1:k,c),c) = 0; % hard threshold
+                    thresh = tmp(ok(k,c),c); % soft threshold
+                    y(:,c) = max(0,tmp(:,c)-thresh).*sign(y(:,c));
+                end
             end
-            
+
+            % to image domain
             y = obj' * y;
             
             y = reshape(y,size(x)); % original size
