@@ -1,5 +1,5 @@
-function [ksp basic norms opts] = dhe(fwd,rev,varargin)
-% [ksp basic norms opts] = dhe(fwd,rev,varargin)
+function [ksp basic nrm opts] = dhe(fwd,rev,varargin)
+% [ksp basic nrm opts] = dhe(fwd,rev,varargin)
 %
 % Double Half Echo Reconstruction (2D only)
 %
@@ -7,50 +7,43 @@ function [ksp basic norms opts] = dhe(fwd,rev,varargin)
 % rev = kspace with reverse readouts [nx ny nc ne]
 %
 % In the interests of using the same recon to do
-% comparisons, code accepts a single fwd dataset
-% to do SAKE/LORAKS reconstruction.
+% comparisons, code accepts a single fwd dataset.
 %
-% ksp is the reconstructed kspace for fwd/rev
-% basic is a basic non-low rank reconstruction
-% norms is the convergence history (nuc and fro)
-% opts returns the options (notably opts.freq)
+% -ksp is the reconstructed kspace for fwd/rev
+% -basic is a basic non-low rank reconstruction
+% -nrm is the convergence history (nuc and fro)
+% -opts returns the options (opts.freq)
 %
 % Note: don't remove readout oversampling before
 % calling this function. With partial sampling the
-% fft+crop method is not correct (specify opts.osf).
+% fft+crop method is incorrect (specify opts.osf).
 %
-% Ref: http://dx.doi.org/10.1002/nbm.4458
+% Ref: https://dx.doi.org/10.1002/nbm.4458
+%      https://doi.org/10.1016/j.mri.2022.08.017
 %% example dataset
 
 if nargin==0
     disp('Running example...')
-    %load meas_MID01395_FID160810_clean_fl3_na_5x5x5_10ave_Fast_Gradient_DHE.mat
-    %data = fftshift(ifft(ifftshift(data,3),[],3),3);
-    %noise = noise / sqrt(size(data,3)); % ifft scale
-    %fwd = data(:,:,32,1,1); rev = data(:,:,32,1,2);
-    %varargin = {'center',[26 51],'noise',noise,'delete1st',4,'readout',2};
-    
     load meas_MID00382_FID42164_clean_fl2_m400.mat
     data = squeeze(data); fwd = data(:,:,1); rev = data(:,:,2);
-    varargin = {'center',[97 193],'noise',[],'delete1st',[2 0],'readout',2};
+    varargin = {'center',[],'delete1st',[2 0],'readout',2};
 end
 
 %% setup
 
 % default options
-opts.width = [5 5]; % kernel width 
-opts.radial = 0; % use radial kernel
+opts.width = [4 4]; % kernel width (in kx ky)
+opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate symmetry
-opts.tol = 1e-6; % tolerance (fraction change in norm)
+opts.tol = 1e-6; % relative tolerance
 opts.gpu = 1; % use gpu if available
 opts.maxit = 1e4; % maximum no. iterations
-opts.noise = []; % noise std, if available
+opts.std = []; % noise std dev, if available
 opts.center = []; % center of kspace, if available
-opts.delete1st = [1 0]; % delete [first last] ADC points
+opts.delete1st = [1 0]; % delete [first last] readout pts
 opts.readout = 1; % readout dimension (1 or 2)
 opts.osf = 2; % readout oversampling factor (default 2)
 opts.freq = []; % off resonance in deg/dwell ([] = auto)
-opts.quiet = 0; % no output
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -64,16 +57,16 @@ for k = 1:2:numel(varargin)
 end
 
 %% argument checks
-if ndims(fwd)<2 || ndims(fwd)>4 || ~isfloat(fwd)
-    error('''fwd'' must be a 2d-4d float array.')
+if ndims(fwd)<2 || ndims(fwd)>4 || ~isfloat(fwd) || isreal(fwd)
+    error('''fwd'' must be a 2d-4d complex float array.')
 end
 if ~exist('rev','var') || isempty(rev)
     nh = 1; % no. half echos
     rev = []; % no rev echo
 else
     nh = 2; % no. half echos
-    if ndims(rev)<2 || ndims(rev)>4 || ~isfloat(rev)
-        error('''rev'' must be a 2d-4d float array.')
+    if ndims(rev)<2 || ndims(rev)>4 || ~isfloat(rev) || isreal(fwd)
+        error('''rev'' must be a 2d-4d complex float array.')
     end
     if ~isequal(size(fwd),size(rev))
         error('''fwd'' and ''rev'' must be same size.')
@@ -99,7 +92,7 @@ if opts.readout==2
 elseif opts.readout~=1
     error('readout must be 1 or 2.');
 end
-if isequal(opts.noise,0) || numel(opts.noise)>1
+if isequal(opts.std,0) || numel(opts.std)>1
     error('noise std must be a non-zero scalar');
 end
 if any(mod(opts.delete1st,1)) || any(opts.delete1st<0)
@@ -153,41 +146,31 @@ if any(opts.delete1st)
     data = mask.*data;
 end
 
-% estimate center of kspace
+% estimate center of kspace (heuristic)
 if isempty(opts.center)
     [~,k] = max(reshape(abs(data),[],nc*ne,nh));
     [x y] = ind2sub([nx ny],reshape(k,nc*ne,nh));
-    center = round([median(x,1);median(y,1)]); % median over coils/echos
-    opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
+    center = round([median(x,1);median(y,1)]); % for fwd and rev
+    opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev 
 elseif opts.readout==2
     opts.center = flip(opts.center);
 end
-
-% align kspace center (helps for loraks)
-%if opts.loraks
-%    for k = 1:2
-%        data(:,:,:,k) = circshift(data(:,:,:,k),opts.center(1)-center(1,k));
-%        mask(:,:,:,k) = circshift(mask(:,:,:,k),opts.center(1)-center(1,k)); 
-%    end
-%    fprintf('Shifted [fwd/rev] by [%+i/%+i]\n',opts.center(1)-center(1,:));
-%end
 
 % indices for conjugate reflection about center
 opts.flip.x = circshift(nx:-1:1,[0 2*opts.center(1)-1]);
 opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 
 % estimate noise std (heuristic)
-if isempty(opts.noise)
+if isempty(opts.std)
     tmp = nonzeros(data); tmp = sort([real(tmp); imag(tmp)]);
-    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k); % trim 20%
-    opts.noise = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
+    k = ceil(numel(tmp)/10); tmp = tmp(k:end-k+1); % trim 20%
+    opts.std = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
 end
-noise_floor = opts.noise * sqrt(nnz(mask));
+noise_floor = opts.std * sqrt(nnz(mask));
 
 % display
 disp(rmfield(opts,{'flip','kernel'}));
 fprintf('Density = %f\n',nnz(mask)/numel(mask));
-fprintf('Noise std = %.2e\n',opts.noise);
 frac = sum(any(mask,2))/nx; % echo fraction
 for j = 1:ne
     for k = 1:nh
@@ -217,13 +200,13 @@ end
 
 %% corrections - need both fwd & rev
 
-if nh>1 && ~isequal(opts.freq,0);
+if nh>1 && ~isequal(opts.freq,0)
     
-    % k-space units: deg/dwell
+    % frequency: unit = deg/dwell
     opts.kx = (-nx/2:nx/2-1)' * pi / 180;
     
     % quick scan to find global minimum
-    opts.range = linspace(-2,2,11);
+    opts.range = linspace(-3,3,11);
     for k = 1:numel(opts.range)
         opts.nrm(k) = myfun(opts.range(k),data,opts);
     end
@@ -231,8 +214,8 @@ if nh>1 && ~isequal(opts.freq,0);
     
     % precalculate derivative matrix
     roll = cast(i*opts.kx,'like',data);
-    tmp(:,:,:,:,1) = repmat(-roll,1,ny,nc,ne);
-    tmp(:,:,:,:,2) = repmat(+roll,1,ny,nc,ne);
+    tmp =           repmat(-roll,1,ny,nc,ne);
+    tmp = cat(5,tmp,repmat(+roll,1,ny,nc,ne));
     tmp = reshape(tmp,size(data)); % make sure
     opts.P = make_data_matrix(tmp,opts);
     
@@ -244,7 +227,7 @@ if nh>1 && ~isequal(opts.freq,0);
     end
     
     % off resonance correction
-    roll = exp(i*opts.kx*opts.freq(1));
+    roll = exp(i*opts.kx*opts.freq);
     data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
     data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
     
@@ -276,75 +259,51 @@ ksp = zeros(size(data),'like',data);
 for iter = 1:max(1,opts.maxit)
 
     % data consistency
+    old = ksp; % old ksp to check convergence
     ksp = ksp + bsxfun(@times,data-ksp,mask);
-
+   
     % data matrix
     A = make_data_matrix(ksp,opts);
     
-    % row space and singular values (squared)
+    % row space and singular values
     if size(A,1)<=size(A,2)
-        [~,W,V] = svd(A,0);
-        W = diag(W).^2;
+        [~,W,V] = svd(A,'econ');
+        W = diag(W);
         V = V(:,1:numel(W));
     else
         [V W] = svd(A'*A);
-        W = diag(W);
+        W = sqrt(diag(W));
     end
-    W = gather(sqrt(W));
-
-    % keep track of norms
-    norms(1,iter) = norm(W,1); % nuclear norm 
-    norms(2,iter) = norm(W,2); % Frobenius norm
-    if opts.maxit<=1; return; end % bail early
     
     % minimum variance filter
-    tmp = min(W(2),noise_floor);
-    f = max(0,1 - tmp^2./W.^2);
+    f = max(0,1-noise_floor^2./W.^2);
     A = A * (V * diag(f) * V');
     
     % hankel structure (average along anti-diagonals)   
     ksp = undo_data_matrix(A,opts);
     
-    % experimental - linesearch along update direction
-%     grd = bsxfun(@times,ksp,~mask);
-%     A = make_data_matrix(data,opts);
-%     dA = make_data_matrix(grd,opts);
-%     
-%     % ...but what is the penalty function?
-%     penalty = @(a)sum(svd(A+a*dA).^0.5);
-%     a = linspace(0.75,1.25,3);
-%     for k = 1:numel(a)
-%         err(k) = penalty(a(k));
-%     end
-%     p = polyfit(a,err,2);
-%     best = -p(2)/p(1)/2;
-%     %plot(a,err);title(gather(best));drawnow;
-%     ksp = best * ksp;
-    
-    % check convergence (fractional change in Frobenius norm)
-    if iter==1
-        tol(iter) = opts.tol;
-    else
-        tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
-    end
-    converged = sum(tol<opts.tol) > 10;
+    % convergence metrics
+    nrm(1,iter) = norm(W,1); % nuclear norm 
+    nrm(2,iter) = norm(ksp(:)-old(:)) / norm(ksp(:)); % delta ksp
+    converged = sum(nrm(2,:)<opts.tol)>10; % 10 iterations past tol
 
     % display progress every 1 second
-    if iter==1 || toc(t) > 1 || converged
-        if exist('t','var') && ~exist('itspersec','var')
-            itspersec = (iter-1) / toc(t);
-            fprintf('Iterations per second: %.1f\n',itspersec);
+    if iter==1
+        t(1) = tic; % global timer
+        t(2) = t(1); % display timer
+    elseif converged || toc(t(2)) > 1
+        if t(1)==t(2)
+            fprintf('Iterations per second: %.1f\n',(iter-1)/toc(t(1)));
         end
-        display(W,f,noise_floor,ksp,data,iter,norms,tol,mask,opts);
-        t = tic(); if ~exist('t0','var'); t0 = t; end
+        display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(2) = tic();
     end
 
-    % finish when nothing left to do
-    if converged; break; end
+    % finish
+    if converged || opts.maxit<=1; break; end
 
 end
 
-fprintf('Total time: %.1f sec (%i iters)\n',toc(t0),iter);
+fprintf('Total time: %.1f sec (%i iters)\n',toc(t(1)),iter);
 
 % remove 2x oversampling
 if opts.osf > 1
@@ -364,11 +323,8 @@ if opts.readout==2
     basic = permute(basic,[2 1 3 4]);
 end
 
-% return the nullspace
-opts.nullspace = V(:,f==0);
-
 % only return first/last norms
-norms = norms(:,[1 end]);
+nrm = nrm(:,[1 end]);
 
 % avoid dumping to screen
 if nargout==0; clear; end
@@ -431,7 +387,7 @@ roll = exp(i*opts.kx*freq(1));
 data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
 data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
 
-% phase correction
+% phase correction (not necessary but why not)
 r = dot(data(:,:,:,:,1),data(:,:,:,:,2));
 d = dot(data(:,:,:,:,1),data(:,:,:,:,1));
 r = reshape(r,[],1); d = reshape(d,[],1);
@@ -470,9 +426,7 @@ nrm = gather(sum( W,'double'));
 grd = gather(sum(dW,'double'));
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,data,iter,norms,tol,mask,opts)
-
-if opts.quiet; return; end
+function display(W,f,noise_floor,ksp,iter,nrm,mask,opts)
 
 nx = opts.dims(1);
 ne = opts.dims(4);
@@ -491,15 +445,13 @@ if iter==1 && isfield(opts,'nrm') && opts.dims(5)>1 % only if nh>1
     axis tight; yticklabels(''); xlabel('freq (deg/dwell)'); 
     ylabel('||A||_*','fontweight','bold'); grid on;
 else
-    ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:)); grid on;
-    legend('||A||_*','||A||_F','location','north west'); xlabel('iters'); 
-    title(sprintf('tol %.2e',tol(end))); axis(ax,'tight');
+    ax = plotyy(1:iter,nrm(1,:),1:iter,nrm(2,:),'semilogy','semilogy');
+    legend('||A||_*','||Δk||','location','north east'); xlabel('iters'); 
+    title(sprintf('tol %.2e',nrm(2,end))); axis(ax,'tight');
 end
 
 % mask on iter=1 to show the blackness of kspace
-if iter==1
-    ksp = bsxfun(@times,ksp,mask);
-end
+if iter==1; ksp = bsxfun(@times,ksp,mask); end
 
 % prefer ims over imagesc
 if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
@@ -509,22 +461,22 @@ subplot(2,4,2); imagesc(log(sum(abs(ksp(:,:,:,1,1)),3)));
 xlabel(num2str(size(ksp,2),'ky [%i]'));
 ylabel(num2str(size(ksp,1),'kx [%i]'));
 if nh==2; title('kspace (fwd)'); else; title('kspace (echo 1)'); end
-line([1 size(ksp,2)],min([opts.center(1) opts.center(1)],size(ksp,1)));
-line(min([opts.center(2) opts.center(2)],size(ksp,2)),[1 size(ksp,1)]);
+line(xlim,[opts.center(1) opts.center(1)]);
+line([opts.center(2) opts.center(2)],ylim);
 if nh==2
     subplot(2,4,6); imagesc(log(sum(abs(ksp(:,:,:,1,2)),3)));
     xlabel(num2str(size(ksp,2),'ky [%i]'));
     ylabel(num2str(size(ksp,1),'kx [%i]'));
     title('kspace (rev)');
-    line([1 size(ksp,2)],min([opts.center(1) opts.center(1)],size(ksp,1)));
-    line(min([opts.center(2) opts.center(2)],size(ksp,2)),[1 size(ksp,1)]);
+    line(xlim,[opts.center(1) opts.center(1)]);
+    line([opts.center(2) opts.center(2)],ylim);
 elseif ne>1
     subplot(2,4,6); imagesc(log(sum(abs(ksp(:,:,:,ne,1)),3)));
     xlabel(num2str(size(ksp,2),'ky [%i]'));
     ylabel(num2str(size(ksp,1),'kx [%i]'));
     title(sprintf('kspace (echo %i)',ne));
-    line([1 size(ksp,2)],min([opts.center(1) opts.center(1)],size(ksp,1)));
-    line(min([opts.center(2) opts.center(2)],size(ksp,2)),[1 size(ksp,1)]);
+    line(xlim,[opts.center(1) opts.center(1)]);
+    line([opts.center(2) opts.center(2)],ylim);
 else
     subplot(2,4,6); imagesc(0); axis off;
 end
