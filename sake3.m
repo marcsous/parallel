@@ -40,7 +40,7 @@ end
 % default options
 opts.width = 4; % kernel width: [x y z] or scalar
 opts.radial = 1; % use radial kernel [1 or 0]
-opts.loraks = 1; % phase constraint (loraks)
+opts.loraks = 0; % phase constraint (loraks)
 opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.std = []; % noise std dev, if available
