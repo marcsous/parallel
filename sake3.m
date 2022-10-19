@@ -46,7 +46,7 @@ opts.maxit = 1e4; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.gpu = 1; % use GPU, if available (often faster without)
-opts.sparsity = 0.1; % sparsity in wavelet domain (0.1=10% zeros)
+opts.sparsity = 0; % sparsity in wavelet domain (0.1=10% zeros)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
