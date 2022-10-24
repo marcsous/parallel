@@ -70,7 +70,7 @@ end
 
 if numel(opts.width)==1
     opts.width = [1 1 1] * opts.width;
-elseif numel(opts.width~=3)
+elseif numel(opts.width)~=3
     error('width must have 3 elements');
 end
 if nz==1; opts.width(3) = 1; end % for 2D case
