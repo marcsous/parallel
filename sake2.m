@@ -25,13 +25,15 @@ function ksp = sake2(data,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom.mat
+    %load phantom.mat
+    load head
     data = fftshift(fft2(data));
+    %data=data+11*complex(randn(size(data)),rand(size(data)));
     mask = false(256,256);
-    mask(1:141,1:2:256) = 1; % undersampling (and partial kx)
-    mask(1:141,121:136) = 1; % self-calibration 
+    mask(:,1:3:256) = 1; % undersampling (and partial kx)
+    mask(:,126:132) = 1; % self-calibration 
     %varargin{1} = 'cal'; varargin{2} = data(:,121:136,:); % separate calibation
-    varargin{3} = 'loraks'; varargin{4} = 1; % allow conjugate symmetry
+    %varargin{3} = 'loraks'; varargin{4} = 1; % allow conjugate symmetry
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -41,7 +43,7 @@ end
 opts.width = 4; % kernel width
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
-opts.tol = 1e-7; % tolerance (fraction change in norm)
+opts.tol = 1e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
@@ -64,6 +66,9 @@ end
 % argument checks
 if ndims(data)<2 || ndims(data)>3 || ~isfloat(data) || isreal(data)
     error('''data'' must be a 3d complex float array.')
+end
+if numel(opts.width)~=1
+    error('width must be scalar');
 end
 [nx ny nc] = size(data);
 
@@ -133,19 +138,46 @@ if ~isempty(opts.cal)
 
     cal = cast(opts.cal,'like',data);
     A = make_data_matrix(cal,opts);
-    [V,~] = svd(A'*A);
+    [V W] = svd(A'*A); % could truncate V based on W...
 
 end
 
 %% Cadzow algorithm
 
-mask = data ~= 0; % sampling mask
-ksp = zeros(size(data),'like',data);
+ksp = data;
 
 for iter = 1:opts.maxit
 
-    % data consistency
-    ksp = ksp + (data-ksp).*mask;
+    % calibration matrix / data consistency
+    if iter==1
+        A = make_data_matrix(ksp,opts);
+        ix = (A~=0);
+        val = A(ix);
+    else
+        A(ix) = val; % avoid function call
+    end
+    
+    % row space and singular values
+    if isempty(opts.cal)
+        [V W] = svd(A'*A);
+        W = sqrt(diag(W));
+    else
+        W = sqrt(svd(A'*A));    
+    end
+
+    % minimum variance filter
+    f = max(0,1-noise_floor.^2./W.^2);
+    A = A * (V * diag(f) * V');
+    
+    % undo hankel structure
+    if iter==1
+        xi = 1:uint32(numel(A));
+        if isa(ix,'gpuArray')
+            xi = gpuArray(xi);
+        end
+        xi = undo_data_matrix(xi,opts);
+    end
+    ksp = mean(A(xi),4);
 
     % sparsity
     if opts.sparsity
@@ -154,43 +186,24 @@ for iter = 1:opts.maxit
         ksp = ifft2(ksp); % to kspace
     end
 
-    % calibration matrix
-    A = make_data_matrix(ksp,opts);
-
-    % row space and singular values
-    if isempty(opts.cal)
-        [V W] = svd(A'*A);
-        W = diag(W);
-    else
-        W = svd(A'*A);
-    end
-    W = sqrt(gather(W));
-
-    % minimum variance filter
-    f = max(0,1-noise_floor.^2./W.^2);
-    A = A * (V * diag(f) * V');
-
-    % hankel structure (average along anti-diagonals)
-    ksp = undo_data_matrix(A,opts);
-
     % check convergence (fractional change in Frobenius norm)
     norms(1,iter) = norm(W,1); % nuclear norm
     norms(2,iter) = norm(W,2); % Frobenius norm
     if iter==1
-        tol(iter) = opts.tol;
+        tol(iter) = cast(opts.tol,'like',norms);
     else
         tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
     end
     converged = sum(tol<opts.tol) > 10;
 
     % display progress every 1 second
-    if iter==1 || toc(t) > 1 || converged
-         if exist('t','var') && ~exist('itspersec','var')
-            itspersec = (iter-1)/toc(t);
-            fprintf('Iterations per second: %.1f\n',itspersec);
-        end
-        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts);
-        t = tic();
+    if iter==1
+        t(1:2) = tic(); % global/display timers
+    elseif toc(t(2)) > 1 || converged || iter==opts.maxit
+        if t(1)==t(2)
+            fprintf('Iterations per second: %.2f\n',(iter-1)/toc(t(2)));
+        end    
+        display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(2) = tic();          
     end
 
     % finish when nothing left to do
@@ -198,6 +211,7 @@ for iter = 1:opts.maxit
 
 end
 
+fprintf('Iterations performed: %i (%.0f sec)\n',iter,toc(t(1)));
 if nargout==0; clear; end % avoid dumping to screen
 
 %% make data matrix
@@ -219,7 +233,7 @@ end
 A = reshape(A,nx*ny,nc*nk);
 
 %% undo data matrix
-function data = undo_data_matrix(A,opts)
+function A = undo_data_matrix(A,opts)
 
 nx = opts.dims(1);
 ny = opts.dims(2);
@@ -231,25 +245,17 @@ A = reshape(A,nx,ny,nc,nk);
 for k = 1:nk
     x = opts.kernel.x(k);
     y = opts.kernel.y(k);
-    A(:,:,:,k,:) = circshift(A(:,:,:,k,:),-[x y]);
+    A(:,:,:,k) = circshift(A(:,:,:,k),-[x y]);
 end
 
-data = mean(A,4);
-
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts)
+function display(W,f,noise_floor,ksp,iter,tol,norms,opts)
 
 % plot singular values
 subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
 line(xlim,gather([1 1]*noise_floor/W(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
-
-% mask on iter=1 to show the blackness of kspace
-if iter==1
-    ksp = ksp .* mask; 
-    if opts.loraks; ksp = ksp(:,:,1:size(ksp,3)/2); end
-end
 
 % prefer ims over imagesc
 if exist('ims','file'); imagesc = @(x)ims(x,-0.99); end
