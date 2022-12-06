@@ -4,11 +4,11 @@ function ksp = sake2(data,varargin)
 % 2D MRI reconstruction based on matrix completion.
 %
 % Singular value filtering is done based on opts.std
-% which is a key parameter that affects image quality.
+% which is a key parameter affecting the image quality.
 %
 % Conjugate symmetry requires the center of kspace to be
 % at the center of the array so that flip works correctly.
-% Same for separate calibration (but doesn't work well).
+% Ditto separate calibration data (doesn't work well).
 %
 % Inputs:
 %  -data [nx ny nc]: 2D kspace data array from nc coils
@@ -25,15 +25,15 @@ function ksp = sake2(data,varargin)
 
 if nargin==0
     disp('Running example...')
-    %load phantom.mat
     load head
     data = fftshift(fft2(data));
-    %data=data+11*complex(randn(size(data)),rand(size(data)));
     mask = false(256,256);
-    mask(:,1:3:256) = 1; % undersampling (and partial kx)
-    mask(:,126:132) = 1; % self-calibration 
-    %varargin{1} = 'cal'; varargin{2} = data(:,121:136,:); % separate calibation
-    %varargin{3} = 'loraks'; varargin{4} = 1; % allow conjugate symmetry
+    R = 4; % speedup factor
+    mask(:,1:R:end) = 1; % undersampling
+    %mask(:,125:133) = 1; % self calibration (or separate)
+    varargin{1} = 'width'; varargin{2} = R+2; % specify kernel width   
+    varargin{3} = 'cal'; varargin{4} = data(:,125:133,:); % separate calibation
+    %varargin{5} = 'loraks'; varargin{6} = 1; % employ conjugate symmetry 
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -43,7 +43,7 @@ end
 opts.width = 4; % kernel width
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
-opts.tol = 1e-6; % tolerance (fraction change in norm)
+opts.tol = 1e-5; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
@@ -104,7 +104,6 @@ if opts.loraks
     data = cat(3,data,conj(flip(flip(data,1),2)));
     opts.cal = cat(3,opts.cal,conj(flip(flip(opts.cal,1),2)));
 end
-if isempty(opts.cal); opts.cal = []; end
 
 % dimensions of the dataset
 opts.dims = [nx ny nc nk];
@@ -138,8 +137,8 @@ if ~isempty(opts.cal)
 
     cal = cast(opts.cal,'like',data);
     A = make_data_matrix(cal,opts);
-    [V W] = svd(A'*A); % could truncate V based on W...
-
+    [V,~] = svd(A'*A); clear cal;
+    
 end
 
 %% Cadzow algorithm
@@ -148,13 +147,12 @@ ksp = data;
 
 for iter = 1:opts.maxit
 
-    % calibration matrix / data consistency
+    % make calibration matrix
     if iter==1
         A = make_data_matrix(ksp,opts);
-        ix = (A~=0);
-        val = A(ix);
+        ix = (A ~= 0); val = A(ix);
     else
-        A(ix) = val; % avoid function call
+        A(ix) = val; % data consistency
     end
     
     % row space and singular values
@@ -164,7 +162,7 @@ for iter = 1:opts.maxit
     else
         W = sqrt(svd(A'*A));    
     end
-
+    
     % minimum variance filter
     f = max(0,1-noise_floor.^2./W.^2);
     A = A * (V * diag(f) * V');
@@ -197,13 +195,15 @@ for iter = 1:opts.maxit
     converged = sum(tol<opts.tol) > 10;
 
     % display progress every 1 second
-    if iter==1
-        t(1:2) = tic(); % global/display timers
-    elseif toc(t(2)) > 1 || converged || iter==opts.maxit
-        if t(1)==t(2)
-            fprintf('Iterations per second: %.2f\n',(iter-1)/toc(t(2)));
-        end    
-        display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(2) = tic();          
+    if iter==1 || toc(t(1)) > 1 || converged || iter==opts.maxit
+        if iter==1
+            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1:2) = tic();
+        elseif t(1)==t(2)
+            fprintf('Iterations per second: %.2f\n',(iter-1) / toc(t(1)));
+            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1) = tic();
+        else
+            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1) = tic();    
+        end
     end
 
     % finish when nothing left to do
@@ -211,7 +211,7 @@ for iter = 1:opts.maxit
 
 end
 
-fprintf('Iterations performed: %i (%.0f sec)\n',iter,toc(t(1)));
+fprintf('Iterations performed: %i (%.1f sec)\n',iter,toc(t(2)));
 if nargout==0; clear; end % avoid dumping to screen
 
 %% make data matrix
