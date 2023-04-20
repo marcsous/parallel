@@ -27,17 +27,18 @@ if nargin==0
     load meas_MID00382_FID42164_clean_fl2_m400.mat
     data = squeeze(data); fwd = data(:,:,1); rev = data(:,:,2);
     varargin = {'center',[],'delete1st',[2 0],'readout',2};
+    clearvars -except fwd rev varargin
 end
 
 %% setup
 
 % default options
-opts.width = [4 4]; % kernel width (in kx ky)
+opts.width = [5 5]; % kernel width (in kx ky)
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate symmetry
 opts.tol = 1e-6; % relative tolerance
 opts.gpu = 1; % use gpu if available
-opts.maxit = 1e4; % maximum no. iterations
+opts.maxit = 1e3; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.center = []; % center of kspace, if available
 opts.delete1st = [1 0]; % delete [first last] readout pts
@@ -151,7 +152,7 @@ if isempty(opts.center)
     [~,k] = max(reshape(abs(data),[],nc*ne,nh));
     [x y] = ind2sub([nx ny],reshape(k,nc*ne,nh));
     center = round([median(x,1);median(y,1)]); % for fwd and rev
-    opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev 
+    opts.center = gather(round(mean(center,2)))'; % mean of fwd/rev
 elseif opts.readout==2
     opts.center = flip(opts.center);
 end
@@ -199,53 +200,52 @@ if opts.gpu
 end
 
 %% corrections - need both fwd & rev
-
 if nh>1 && ~isequal(opts.freq,0)
-    
+
     % frequency: unit = deg/dwell
     opts.kx = (-nx/2:nx/2-1)' * pi / 180;
-    
+
     % quick scan to find global minimum
     opts.range = linspace(-3,3,11);
     for k = 1:numel(opts.range)
         opts.nrm(k) = myfun(opts.range(k),data,opts);
     end
     [~,k] = min(opts.nrm); best = opts.range(k);
-    
+
     % precalculate derivative matrix
     roll = cast(i*opts.kx,'like',data);
     tmp =           repmat(-roll,1,ny,nc,ne);
     tmp = cat(5,tmp,repmat(+roll,1,ny,nc,ne));
     tmp = reshape(tmp,size(data)); % make sure
     opts.P = make_data_matrix(tmp,opts);
-    
+
     % off resonance (nuclear norm)
     if isempty(opts.freq)
         fopts = optimset('Display','off','GradObj','on');
         nrm = median(abs(nonzeros(data))); % mitigate poor scaling
         opts.freq = fminunc(@(f)myfun(f,data/nrm,opts),best,fopts);
     end
-    
+
     % off resonance correction
     roll = exp(i*opts.kx*opts.freq);
     data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
     data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
-    
+
     % phase correction
     r = dot(data(:,:,:,:,1),data(:,:,:,:,2));
     d = dot(data(:,:,:,:,1),data(:,:,:,:,1));
     r = reshape(r,[],1); d = reshape(real(d),[],1);
     phi = angle((r'*d) / (d'*d)) / 2;
-    
+
     data(:,:,:,:,1) = data(:,:,:,:,1)./exp(i*phi);
     data(:,:,:,:,2) = data(:,:,:,:,2).*exp(i*phi);
-    
-    % units: dp=radians df=deg/dwell
+
+    % units: phi=radians freq=deg/dwell
     fprintf('Corrections: ϕ=%.2frad Δf=%.2fdeg/dwell\n',phi,opts.freq);
-    
+
     % clear memory on GPU
     opts.P = []; clear tmp roll r d nrm
-    
+
 end
 
 %% basic algorithm (average in place)
@@ -259,12 +259,11 @@ ksp = zeros(size(data),'like',data);
 for iter = 1:max(1,opts.maxit)
 
     % data consistency
-    old = ksp; % old ksp to check convergence
     ksp = ksp + bsxfun(@times,data-ksp,mask);
-   
-    % data matrix
-    A = make_data_matrix(ksp,opts);
-    
+
+    % make calibration matrix
+    [A opts] = make_data_matrix(ksp,opts);
+
     % row space and singular values
     if size(A,1)<=size(A,2)
         [~,W,V] = svd(A,'econ');
@@ -274,28 +273,34 @@ for iter = 1:max(1,opts.maxit)
         [V W] = svd(A'*A);
         W = sqrt(diag(W));
     end
-    
+
     % minimum variance filter
     f = max(0,1-noise_floor^2./W.^2);
     A = A * (V * diag(f) * V');
-    
-    % hankel structure (average along anti-diagonals)   
-    ksp = undo_data_matrix(A,opts);
-    
-    % convergence metrics
-    nrm(1,iter) = norm(W,1); % nuclear norm 
-    nrm(2,iter) = norm(ksp(:)-old(:)) / norm(ksp(:)); % delta ksp
-    converged = sum(nrm(2,:)<opts.tol)>10; % 10 iterations past tol
+
+    % undo hankel structure
+    [ksp opts] = undo_data_matrix(A,opts);
+
+    % check convergence (fractional change in Frobenius norm)
+    nrm(1,iter) = norm(W,1); % nuclear norm
+    nrm(2,iter) = norm(W,2); % Frobenius norm
+    if iter==1
+        tol(iter) = cast(opts.tol,'like',nrm);
+    else
+        tol(iter) = abs(nrm(2,iter)-nrm(2,iter-1))/nrm(2,iter);
+    end
+    converged = sum(tol<opts.tol) > 10;
 
     % display progress every 1 second
-    if iter==1
-        t(1) = tic; % global timer
-        t(2) = t(1); % display timer
-    elseif converged || toc(t(2)) > 1
-        if t(1)==t(2)
-            fprintf('Iterations per second: %.1f\n',(iter-1)/toc(t(1)));
+    if iter==1 || toc(t(1)) > 1 || converged || iter==opts.maxit
+        if iter==1
+            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1:2) = tic();
+        elseif t(1)==t(2)
+            fprintf('Iterations per second: %.2f\n',(iter-1) / toc(t(1)));
+            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1) = tic();
+        else
+            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1) = tic();
         end
-        display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(2) = tic();
     end
 
     % finish
@@ -303,7 +308,7 @@ for iter = 1:max(1,opts.maxit)
 
 end
 
-fprintf('Total time: %.1f sec (%i iters)\n',toc(t(1)),iter);
+fprintf('Total time: %.1f sec (%i iters)\n',toc(t(2)),iter);
 
 % remove 2x oversampling
 if opts.osf > 1
@@ -311,7 +316,7 @@ if opts.osf > 1
     ksp = fftshift(ifft(ksp,[],1));
     ksp = ksp(ok,:,:,:,:);
     ksp = fft(ifftshift(ksp),[],1);
-    
+
     basic = fftshift(ifft(basic,[],1));
     basic = basic(ok,:,:,:,:);
     basic = fft(ifftshift(basic),[],1);
@@ -323,14 +328,14 @@ if opts.readout==2
     basic = permute(basic,[2 1 3 4]);
 end
 
-% only return first/last norms
+% only return first/last nrm
 nrm = nrm(:,[1 end]);
 
 % avoid dumping to screen
 if nargout==0; clear; end
 
 %% make data matrix
-function A = make_data_matrix(data,opts)
+function [A opts] = make_data_matrix(data,opts)
 
 nx = size(data,1);
 ny = size(data,2);
@@ -339,22 +344,27 @@ ne = size(data,4);
 nh = size(data,5);
 nk = opts.dims(6);
 
-A = zeros(nx,ny,nc,ne,nh,nk,'like',data);
-
-for k = 1:nk
-    x = opts.kernel.x(k);
-    y = opts.kernel.y(k);
-    A(:,:,:,:,:,k) = circshift(data,[x y]);
+% precompute the circshifts with fast indexing
+if ~isfield(opts,'ix')
+    opts.ix = repmat(1:uint32(nx*ny*nc*ne*nh),[1 nk]);
+    opts.ix = reshape(opts.ix,[nx ny nc ne nh nk]);
+    for k = 1:nk
+        x = opts.kernel.x(k);
+        y = opts.kernel.y(k);
+        opts.ix(:,:,:,:,:,k) = circshift(opts.ix(:,:,:,:,:,k),[x y]);
+    end
+    if isa(data,'gpuArray'); opts.ix = gpuArray(opts.ix); end
 end
+A = data(opts.ix);
 
 if opts.loraks
-    A = cat(6,A,conj(A(opts.flip.x,opts.flip.y,:,:,:,:)));
+    A = cat(7,A,conj(A(opts.flip.x,opts.flip.y,:,:,:,:)));
 end
 
 A = reshape(A,nx*ny,[]);
 
 %% undo data matrix
-function data = undo_data_matrix(A,opts)
+function [data opts] = undo_data_matrix(A,opts)
 
 nx = opts.dims(1);
 ny = opts.dims(2);
@@ -369,15 +379,21 @@ if opts.loraks
     A(opts.flip.x,opts.flip.y,:,:,:,:,2) = conj(A(:,:,:,:,:,:,2));
 end
 
-for k = 1:nk
-    x = opts.kernel.x(k);
-    y = opts.kernel.y(k);
-    A(:,:,:,:,:,k,:) = circshift(A(:,:,:,:,:,k,:),-[x y]);
+% precompute the circshifts with fast indexing
+if ~isfield(opts,'xi')
+    opts.xi = reshape(1:uint32(numel(A)),size(A));
+    for k = 1:nk
+        x = opts.kernel.x(k);
+        y = opts.kernel.y(k);
+        opts.xi(:,:,:,:,:,k,:) = circshift(opts.xi(:,:,:,:,:,k,:),-[x y]);
+    end
+    if isa(A,'gpuArray'); opts.xi = gpuArray(opts.xi); end
 end
+A = A(opts.xi);
 
 data = mean(reshape(A,nx,ny,nc,ne,nh,[]),6);
 
-%% off resonance + delay penalty function
+%% off resonance + phase penalty function
 function [nrm grd] = myfun(freq,data,opts)
 
 nx = opts.dims(1);
@@ -387,7 +403,7 @@ roll = exp(i*opts.kx*freq(1));
 data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
 data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
 
-% phase correction (not necessary but why not)
+% phase correction (not necessary but why not?)
 r = dot(data(:,:,:,:,1),data(:,:,:,:,2));
 d = dot(data(:,:,:,:,1),data(:,:,:,:,1));
 r = reshape(r,[],1); d = reshape(d,[],1);
@@ -404,9 +420,9 @@ if nargout<2
     if size(A,1)<=size(A,2)
         W = svd(A,0);
     else
-        W = svd(A'*A); 
+        W = svd(A'*A);
         W = sqrt(W);
-    end 
+    end
     dW = [];
 else
     if size(A,1)<=size(A,2)
@@ -433,7 +449,7 @@ ne = opts.dims(4);
 nh = opts.dims(5);
 
 % plot singular values
-subplot(2,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f))); 
+subplot(2,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]); ylim([0 1]); grid on;
 line(xlim,min(1,gather([1 1]*noise_floor/W(1))),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
@@ -441,12 +457,12 @@ legend({'singular vals.','sing. val. filter','noise floor'});
 % plot change in metrics
 subplot(2,4,5);
 if iter==1 && isfield(opts,'nrm') && opts.dims(5)>1 % only if nh>1
-    plot(opts.range,opts.nrm,'-o'); title('off-resonance'); 
-    axis tight; yticklabels(''); xlabel('freq (deg/dwell)'); 
-    ylabel('||A||_*','fontweight','bold'); grid on;
+    plot(opts.range,opts.nrm,'-o'); title('off-resonance'); yticklabels([]);
+    axis tight; ylabel('||A||_*','fontweight','bold'); xlabel('freq (deg/dwell)');
+    line([1 1]*opts.freq,ylim,'linestyle','--','color','red'); grid on;
 else
     ax = plotyy(1:iter,nrm(1,:),1:iter,nrm(2,:),'semilogy','semilogy');
-    legend('||A||_*','||Δk||','location','north east'); xlabel('iters'); 
+    legend('||A||_*','||Δk||','location','northeast'); xlabel('iters');
     title(sprintf('tol %.2e',nrm(2,end))); axis(ax,'tight');
 end
 
@@ -491,7 +507,7 @@ if opts.osf > 1
     ksp = ksp(ok,:,:,:,:);
 end
 
-% show current image 
+% show current image
 subplot(2,4,3); imagesc(sum(abs(ksp(:,:,:,1,1)),3));
 xlabel(num2str(size(ksp,2),'y [%i]'));
 ylabel(num2str(size(ksp,1),'x [%i]'));
@@ -524,7 +540,7 @@ elseif ne>1
     subplot(2,4,8); imagesc(angle(ksp(:,:,1,ne,1)));
     xlabel(num2str(size(ksp,2),'y [%i]'));
     ylabel(num2str(size(ksp,1),'x [%i]'));
-    title(sprintf('phase (echo %i)',ne)); 
+    title(sprintf('phase (echo %i)',ne));
 else
     subplot(2,4,8); imagesc(0); axis off;
 end
