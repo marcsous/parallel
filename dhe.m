@@ -462,7 +462,7 @@ if iter==1 && isfield(opts,'nrm') && opts.dims(5)>1 % only if nh>1
     line([1 1]*opts.freq,ylim,'linestyle','--','color','red'); grid on;
 else
     ax = plotyy(1:iter,nrm(1,:),1:iter,nrm(2,:),'semilogy','semilogy');
-    legend('||A||_*','||Δk||','location','northeast'); xlabel('iters');
+    legend('||A||_*','||A||_F','location','northeast'); xlabel('iters');
     title(sprintf('tol %.2e',nrm(2,end))); axis(ax,'tight');
 end
 
