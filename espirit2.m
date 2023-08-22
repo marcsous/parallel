@@ -15,7 +15,7 @@ if nargin==0
     disp('Running example...')
     load brain_alias_8ch.mat
     index = find(any(rms(data,3)));
-    varargin = {'std',5};
+    varargin = {'std',5,'beta',0.1};
     clearvars -except data index varargin
 end
 
@@ -27,7 +27,7 @@ opts.ni = 2; % no. image components
 opts.maxit = 1000; % pcg max iterations
 opts.std = []; % noise std dev, if available
 opts.lambda = 0; % L1 sparsity regularization
-opts.beta = 0.1; % L2 Tikhonov regularization
+opts.beta = 0; % L2 Tikhonov regularization
 opts.gpu = 1; % use gpu, if available
 
 % varargin handling (must be option/value pairs)
