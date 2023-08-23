@@ -1,7 +1,7 @@
-function im = espirit2(data,index)
-
+function im = espirit2(data,index,varargin)
+%im = espirit2(data,index,varargin)
+%
 % Implementation of ESPIRIT (in 2nd-dimension only).
-% Line spacing must be R with acs spacing 1.
 %
 % Inputs:
 % - data is kspace (nx ny nc) with zeros in empty lines
@@ -14,9 +14,8 @@ function im = espirit2(data,index)
 if nargin==0
     disp('Running example...')
     load brain_alias_8ch.mat
-    index = find(any(rms(data,3)));
     varargin = {'std',5,'beta',0.1};
-    clearvars -except data index varargin
+    clearvars -except data varargin
 end
 
 %% options
@@ -47,9 +46,14 @@ end
 [nx ny nc] = size(data);
 
 % acquired lines - clean up (no duplicates, sorted ascending)
-index = unique(index);
-if index(1)<1 || index(end)>ny
-    error('index out of bounds');
+if ~exist('index','var') || isempty(index)
+    index = find(any(rms(data,3),1));
+    warning('''index'' not supplied. Guessing...');
+else
+    index = unique(index);
+    if index(1)<1 || index(end)>ny
+        error('index out of bounds');
+    end
 end
 
 % not index (non acquired lines)
@@ -88,9 +92,9 @@ fprintf('ESPIRIT kernel width = %i\n',opts.width)
 fprintf('ESPIRIT radial kernel = %i\n',opts.radial)
 fprintf('ESPIRIT kernel points = %i\n',nk)
 
-% ACS indices in x (without wrap)
-acs.x = 1:nx;
-acs.x(acs.x<1+max(idx) | acs.x>nx+min(idx)) = [];
+% ACS indices in x
+acs.x = find(any(rms(data,3),2));
+if any(diff(acs.x)>1); error('data must be contiguous in kx'); end
 
 % ACS indices in y (with wrap)
 acs.y = [];
@@ -100,6 +104,9 @@ for j = 1:numel(index)
         acs.y = [acs.y index(j)];
     end
 end
+
+R = (index(end)-index(1)+1)/numel(index);
+disp(['ESPIRIT acceleration = ' num2str(R)])
 
 if numel(acs.y)==0
     error('ESPIRIT ACS lines = none')
@@ -114,6 +121,7 @@ A = zeros(numel(acs.x),numel(acs.y),nc,nk,'like',data);
 
 for k = 1:nk
     x = acs.x-kernel.x(k);
+    x = mod(x+nx-1,nx)+1; % wrap in x
     y = acs.y-kernel.y(k);
     y = mod(y+ny-1,ny)+1; % wrap in y
     A(:,:,:,k) = data(x,y,:);
@@ -135,10 +143,10 @@ plot(S); xlim([0 numel(S)]); title('svals');
 line(xlim,[noise_floor noise_floor],'linestyle',':');
 
 % dataspace vectors as convolution kernels
-G = zeros(nv,nc,numel(idx),numel(idy),'like',data);
+G = zeros(nv,nc,nx,ny,'like',data);
 for k = 1:nk
-    x = kernel.x(k)+max(idx)+1;
-    y = kernel.y(k)+max(idy)+1;
+    x = mod(kernel.x(k)+nx-1,nx)+1; % wrap in x
+    y = mod(kernel.y(k)+ny-1,ny)+1; % wrap in y
     G(:,:,x,y) = permute(V(:,k,:),[3 1 2]);
 end
 
@@ -169,7 +177,7 @@ title('ESPIRIT coil 1'); drawnow
 %% solve for image components
 
 % use gpu?
-if opts.gpu 
+if opts.gpu && exist('gpuArray','class')
     C = gpuArray(C);
     data = gpuArray(data);
 end
