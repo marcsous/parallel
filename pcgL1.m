@@ -1,16 +1,18 @@
-function x = pcgL1(A, b, lambda, varargin)
-% x = pcgL1(A, b, lambda, varargin)
+function x = pcgL1(A, b, lambda, maxit, varargin)
+% x = pcgL1(A, b, lambda, maxit, varargin)
 %
 % Solves the following problem via ADMM:
 %
 %   minimize (1/2)*||Ax-b||_2^2 + λ*||x||_1,
 %
 % where A is symmetric positive definite (same as pcg).
+% Best used with anonymous functions, A = @(x)myfunc(x)
+% where myfunc(x) returns (A*x).
 %
-% Meant to be used with anonymous functions, A = @(x)myfunc(x),
-% where myfunc(x) should return:
+% rho is the augmented Lagrangian parameter.
 %
-% - A*x to minimize ||b-Ax||^2 + λ ||x||_1
+% alpha is the over-relaxation parameter (typical values for alpha are
+% between 1.0 and 1.8).
 %
 % Derived from lasso_lsqr.m at
 % http://www.stanford.edu/~boyd/papers/distr_opt_stat_learning_admm.html
@@ -18,9 +20,8 @@ function x = pcgL1(A, b, lambda, varargin)
 %% default options
 
 opts.tol = 1e-6;
-opts.maxit = 20;
 opts.rho = 1;
-opts.alpha = 1.5;
+opts.alpha = 1;
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -38,9 +39,13 @@ end
 if nargin<2
     error('Not enough input arguments: b missing');
 end
-if nargin<3
+if nargin<3 || isempty(lambda)
     lambda = 0;
     warning('Not enough input arguments. Setting lambda=%f',lambda);
+end
+if nargin<4 || isempty(maxit)
+    maxit = 20;
+    warning('Not enough input arguments. Setting maxit=%f',maxit);
 end
 if ~iscolumn(b)
     error('b argument must be a column vector');
@@ -78,12 +83,12 @@ u = zeros(n,1,'like',b);
 
 normb = norm(b);
 
-for k = 1:opts.maxit
+for k = 1:maxit
 
-    % x-update with pcg - doesn't need to be very accurate - sqrt tol OK
+    % x-update with pcg - doesn't need to be very accurate 
     Ak = @(x)A(x) + opts.rho*x;
     bk = b + opts.rho*(z-u);
-    [x flag relres iters resvec] = pcgpc(Ak,bk,sqrt(opts.tol),[],[],[],x);
+    [x flag relres iters resvec] = pcg(Ak,bk,[],[],[],[],x);
 
     if flag~=0
         warning('PCG problem (iter=%i flag=%i)',k,flag);
@@ -94,8 +99,17 @@ for k = 1:opts.maxit
     x_hat = opts.alpha*x + (1 - opts.alpha)*zold;
     z = shrinkage(x_hat + u, lambda/opts.rho);
 
-    if ~any(z(:))
-        error('Too sparse (all zero), reduce lambda.');
+    % catch bad cases and overwrite lambda
+    if k==1
+        target = median(abs(x_hat+u))*opts.rho; % 50% sparsity
+        if all(z(:)==0)
+            fprintf('Too sparse (all zero), reducing lambda to %.1e.\n',target);
+        end
+        if all(z(:)~=0)
+            lambda = median(abs(x_hat+u))*opts.rho;
+            fprintf('Not sparse (all nonzero), increasing lambda to %.1e.\n',target);
+        end
+        lambda = target;
     end
     
     u = u + (x_hat - z);
@@ -108,7 +122,7 @@ for k = 1:opts.maxit
 end
 
 % report sparsity
-fprintf('%s: nonzeros %.2f%% (lambda=%.1e)\n',mfilename,100*nnz(z)/numel(z),lambda);
+fprintf('%s: nonzeros %.1f%% (lambda=%.1e)\n',mfilename,100*nnz(z)/numel(z),lambda);
 
 % check convergence
 if norm(x-z) <  opts.tol*norm(b)
