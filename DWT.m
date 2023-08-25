@@ -8,8 +8,17 @@ classdef DWT
     % notes:
     % -always assumes periodic boundary conditions
     % -relaxed about input shape (vectorized ok) for pcg
-    % -to threshold use Q.thresh(x,sparsity) to do soft
-    %  thresholding to a given sparsity (0.3=>30% zeros)
+    % -use Q.thresh(x,sparsity) to do soft thresholding
+    %  to a given sparsity (e.g. 0.3 <=> 30% zeros)
+    %
+    % BUGFIX (for older matlab versions)
+    % -dwt is hardcoded to use double. to make it work
+    %  with gpuArray edit the following file:
+    %
+    %  /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt3.m
+    %
+    %  Z = zeros(sX(1),2*sX(2)-1,sX(3));
+    %  Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
     %
     % Example:
     %   x = (1:8) + 0.1*randn(1,8,'double');

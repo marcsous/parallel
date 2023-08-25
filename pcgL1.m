@@ -3,7 +3,7 @@ function x = pcgL1(A, b, lambda, maxit, varargin)
 %
 % Solves the following problem via ADMM:
 %
-%   minimize (1/2)*||Ax-b||_2^2 + λ*||x||_1,
+%   minimize (1/2)*||Ax-b||_2^2 + lambda*||x||_1,
 %
 % where A is symmetric positive definite (same as pcg).
 % Best used with anonymous functions, A = @(x)myfunc(x)
@@ -40,12 +40,10 @@ if nargin<2
     error('Not enough input arguments: b missing');
 end
 if nargin<3 || isempty(lambda)
-    lambda = 0;
-    warning('Not enough input arguments. Setting lambda=%f',lambda);
+    error('Not enough input arguments: lambda missing');
 end
 if nargin<4 || isempty(maxit)
     maxit = 20;
-    warning('Not enough input arguments. Setting maxit=%f',maxit);
 end
 if ~iscolumn(b)
     error('b argument must be a column vector');
@@ -61,8 +59,8 @@ end
 % check A is square [n x n]
 try
     tmp = A(b);
-catch
-    error('A(x) failed when passed a vector of length %i',n);
+catch ME
+    error('A(x) failed when passed a vector of length %i: %s',n,ME.message);
 end   
 if ~isequal(size(tmp),[n 1])
     error('A(x) did not return a vector of length %i',n);
@@ -83,33 +81,32 @@ u = zeros(n,1,'like',b);
 
 normb = norm(b);
 
-for k = 1:maxit
+for iter = 1:maxit
 
     % x-update with pcg - doesn't need to be very accurate 
     Ak = @(x)A(x) + opts.rho*x;
     bk = b + opts.rho*(z-u);
     [x flag relres iters resvec] = pcg(Ak,bk,[],[],[],[],x);
 
-    if flag~=0
-        warning('PCG problem (iter=%i flag=%i)',k,flag);
-    end
+    % do we care about these? not really
+    %if flag~=0
+    %    warning('PCG problem (iter=%i flag=%i)',iter,flag);
+    %end
     
     % z-update with relaxation
     zold = z;
     x_hat = opts.alpha*x + (1 - opts.alpha)*zold;
     z = shrinkage(x_hat + u, lambda/opts.rho);
 
-    % catch bad cases and overwrite lambda
-    if k==1
+    % catch bad cases and recommend a ballpark lambda
+    if iter==1
         target = median(abs(x_hat+u))*opts.rho; % 50% sparsity
         if all(z(:)==0)
-            fprintf('Too sparse (all zero), reducing lambda to %.1e.\n',target);
+            error('Too sparse (all zero), try reducing lambda to %.1e.',target);
         end
         if all(z(:)~=0)
-            lambda = median(abs(x_hat+u))*opts.rho;
-            fprintf('Not sparse (all nonzero), increasing lambda to %.1e.\n',target);
+            error('Not sparse (all nonzero), try increasing lambda to %.1e.',target);
         end
-        lambda = target;
     end
     
     u = u + (x_hat - z);
@@ -122,13 +119,13 @@ for k = 1:maxit
 end
 
 % report sparsity
-fprintf('%s: nonzeros %.1f%% (lambda=%.1e)\n',mfilename,100*nnz(z)/numel(z),lambda);
+fprintf('%s: sparsity %.1f%% (lambda=%.1e)\n',mfilename,100*(numel(x)-nnz(z))/numel(z),lambda);
 
 % check convergence
 if norm(x-z) <  opts.tol*norm(b)
-    fprintf('%s: tolerance reached in %i iterations\n',mfilename,k);
+    fprintf('%s: tolerance reached in %i iterations\n',mfilename,iter);
 else
-    fprintf('%s: tolerance not reached in %i iterations\n',mfilename,k);  
+    fprintf('%s: tolerance not reached in %i iterations\n',mfilename,iter);  
 end
 
 x = z;
