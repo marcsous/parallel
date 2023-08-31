@@ -157,7 +157,10 @@ G = fft(fft(G,nx,3),ny,4);
 C = zeros(nx,ny,nc,opts.ni,'like',data);
  
 % matched filter for optimal per pixel passband
-if verLessThan('matlab','9.11')
+try
+    [~,~,C] = pagesvd(G,'econ'); % batch svd
+    C = permute(C(:,1:opts.ni,:,:),[3 4 1 2]);
+catch
     for x = 1:nx
         for y = 1:ny
             [~,~,V] = svd(G(:,:,x,y),'econ');
@@ -166,9 +169,6 @@ if verLessThan('matlab','9.11')
         subplot(1,2,1); imagesc(abs(C(:,:,1)));
         title('ESPIRIT coil 1'); drawnow
     end
-else
-    [~,~,C] = pagesvd(G,'econ'); % batch svd
-    C = permute(C(:,1:opts.ni,:,:),[3 4 1 2]);
 end
 
 subplot(1,2,1); imagesc(abs(C(:,:,1)));
