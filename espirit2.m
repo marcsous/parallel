@@ -2,6 +2,7 @@ function im = espirit2(data,index,varargin)
 %im = espirit2(data,index,varargin)
 %
 % Implementation of ESPIRIT (in 2nd-dimension only).
+% Uses pagesvd.cpp mex-file or builtin for R2021b.
 %
 % Inputs:
 % - data is kspace (nx ny nc) with zeros in empty lines
@@ -158,7 +159,7 @@ C = zeros(nx,ny,nc,opts.ni,'like',data);
  
 % matched filter for optimal per pixel passband
 try
-    [~,~,C] = pagesvd(G,'econ'); % batch svd
+    [~,~,C] = pagesvd(G,'econ');
     C = permute(C(:,1:opts.ni,:,:),[3 4 1 2]);
 catch
     for x = 1:nx
@@ -170,9 +171,6 @@ catch
         title('ESPIRIT coil 1'); drawnow
     end
 end
-
-subplot(1,2,1); imagesc(abs(C(:,:,1)));
-title('ESPIRIT coil 1'); drawnow 
 
 %% solve for image components
 
