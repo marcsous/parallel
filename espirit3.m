@@ -1,29 +1,32 @@
-function im = espirit2(data,varargin)
-%im = espirit2(data,index,varargin)
+function im = espirit3(data,varargin)
+%im = espirit3(data,index,varargin)
 %
-% Implementation of ESPIRIT (in 2nd-dimension only).
-% Uses pagesvd.cpp mex-file or builtin for R2021b.
+% Implementation of ESPIRIT (in 3D).
 %
 % Inputs:
-% - data is kspace (nx ny nc) with zeros in empty lines
+% - data is kspace (nx ny nz nc) with zeros in empty lines
 %
 % Output:
-% - im is the coil-combined image(s) (nx ny ni)
+% - im is the coil-combined image(s) (nx ny nz ni)
 %
 % Example:
 if nargin==0
     disp('Running example...')
-    load brain_alias_8ch.mat
-    varargin = {'std',5,'beta',0.1};
-    clearvars -except data varargin
+    load phantom3D_6coil.mat
+    mask = false(size(data,1),size(data,2),size(data,3));
+    mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % shifted
+    mask(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
+    varargin = {'std',1e-5}; % set some options
+    data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
 %% options
 
-opts.width = 5; % kernel width
+opts.width = 3; % kernel width
 opts.radial = 0; % use radial kernel
-opts.ni = 2; % no. image components
-opts.maxit = 1000; % pcg max iterations
+opts.ni = 1; % no. image components
+opts.maxit = 1000; % max pcg iterations
 opts.std = []; % noise std dev, if available
 opts.lambda = 0; % L1 sparsity regularization
 opts.beta = 0; % L2 Tikhonov regularization
@@ -42,14 +45,20 @@ for k = 1:2:numel(varargin)
 end
 
 %% initialize
-[nx ny nc] = size(data);
+[nx ny nz nc] = size(data);
 
-% sampling mask [nx ny]
-mask = any(data,3); 
+% circular wrap requires even dimensions
+if any(mod([nx ny nz],2))
+    error('Code requires even numbered dimensions');
+end
+fprintf('ESPIRIT dataset = [%i %i %i %i]\n',nx,ny,nz,nc)
+
+% sampling mask [nx ny nz]
+mask = any(data,4); 
 
 % estimate noise std (heuristic)
 if isempty(opts.std)
-    tmp = data(repmat(mask,[1 1 nc]));
+    tmp = data(repmat(mask,[1 1 1 nc]));
     tmp = sort([real(tmp); imag(tmp)]);
     k = ceil(numel(tmp)/10); tmp = tmp(k:end-k+1); % trim 20%
     opts.std = 1.4826 * median(abs(tmp-median(tmp))) * sqrt(2);
@@ -61,15 +70,16 @@ fprintf('ESPIRIT noise std = %.1e\n',opts.std)
 %% ESPIRIT setup
 
 % convolution kernel indicies
-[x y] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
+[x y z] = ndgrid(-fix(opts.width/2):fix(opts.width/2));
 if opts.radial
-    k = sqrt(x.^2+y.^2)<=opts.width/2;
+    k = sqrt(x.^2+y.^2+z.^2)<=opts.width/2;
 else
-    k = abs(x)<=opts.width/2 & abs(y)<=opts.width/2;
+    k = abs(x)<=opts.width/2 & abs(y)<=opts.width/2 & abs(z)<=opts.width/2;
 end
 nk = nnz(k);
 kernel.x = x(k);
 kernel.y = y(k);
+kernel.z = z(k);
 kernel.mask = k;
 
 fprintf('ESPIRIT kernel width = %i\n',opts.width)
@@ -93,8 +103,9 @@ A = zeros(na,nc,nk,'like',data);
 for k = 1:nk
     x = kernel.x(k);
     y = kernel.y(k);
+    z = kernel.z(k);   
     for c = 1:nc
-        tmp = circshift(data(:,:,c),[x y]);
+        tmp = circshift(data(:,:,:,c),[x y z]);
         A(:,c,k) = tmp(acs);
     end
 end
@@ -114,77 +125,72 @@ plot(S); xlim([0 numel(S)]); title('svals');
 line(xlim,[noise_floor noise_floor],'linestyle',':'); drawnow
 
 % dataspace vectors as convolution kernels
-C = zeros(nv,nc,nx,ny,'like',data);
+C = zeros(nv,nc,nx,ny,nz,'like',data);
 for k = 1:nk
     x = mod(kernel.x(k)+nx-1,nx)+1; % wrap in x
     y = mod(kernel.y(k)+ny-1,ny)+1; % wrap in y
-    C(:,:,x,y) = permute(V(:,k,:),[3 1 2]);
+    z = mod(kernel.z(k)+nz-1,nz)+1; % wrap in z    
+    C(:,:,x,y,z) = permute(V(:,k,:),[3 1 2]);
 end
 
 %% ESPIRIT coil sensitivities
 
 % fft convolution <=> image multiplication
-C = fft(fft(C,nx,3),ny,4); % nv nc nx ny
+C = fft(fft(fft(C,nx,3),ny,4),nz,5); % nv nc nx ny nz
 
 % optimal passband per pixel
 [~,~,C] = pagesvd(C,'econ');
 
 % discard small features
-C = C(:,1:opts.ni,:,:);
+C = C(:,1:opts.ni,:,:,:);
 
-% reorder: nx ny nc ni
-C = permute(C,[3 4 1 2]);
-
-%% switch to GPU (move earlier if pagesvd available on GPU)
-if opts.gpu
-    try
-    C = gpuArray(C);
-    data = gpuArray(data);
-    nindex = gpuArray(nindex);
-    end
-end
+% reorder: nx ny nz nc ni
+C = permute(C,[3 4 5 1 2]);
 
 %% solve for image components
 
+% use gpu?
+if opts.gpu && exist('gpuArray','class')
+    C = gpuArray(C);
+    data = gpuArray(data);
+end
+
 % linear operators (solve A'Ax=A'b)
 AA = @(x)myespirit(C,x,mask,opts.beta);
-Ab = bsxfun(@times,conj(C),fft2(data));
-Ab = reshape(sum(Ab,3),[],1);
+Ab = bsxfun(@times,conj(C),fft3(data));
+Ab = reshape(sum(Ab,4),[],1);
 
 % solve by pcg
-tic
 if opts.lambda
     im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
 else
     im = pcg(AA,Ab,0,opts.maxit);
 end
-toc
 
 % display
-im = reshape(im,nx,ny,opts.ni);
-for k = 1:opts.ni
-    subplot(1,opts.ni,k); imagesc(abs(im(:,:,k)));
-    title(sprintf('ESPIRIT component %i',k));
-end
+im = reshape(im,nx,ny,nz,opts.ni);
+slice = floor(nx/2+1); % the middle slice in x
+imagesc(squeeze(abs(im(slice,:,:,:))));
+title(sprintf('slice %i (R=%.1f)',slice,R));
+xlabel('z'); ylabel('y'); drawnow;
 
 % avoid dumping output to screen
 if nargout==0; clear; end
 
-
 %% ESPIRIT operator
 function r = myespirit(C,im,mask,beta)
 
-[nx ny nc ni] = size(C);
-im = reshape(im,nx,ny,1,ni);
+[nx ny nz nc ni] = size(C);
+im = reshape(im,nx,ny,nz,1,ni);
 
 % normal equations
 r = bsxfun(@times,C,im);
-r = sum(r,4);
-r = ifft2(r);
+r = sum(r,5);
+r = ifft3(r);
 r = bsxfun(@times,r,mask);
-r = fft2(r);
+r = fft3(r);
 r = bsxfun(@times,conj(C),r);
-r = sum(r,3);
+r = sum(r,4);
 
 % Tikhonov
 r = r+beta^2*im;

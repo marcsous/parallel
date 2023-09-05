@@ -27,9 +27,9 @@ if nargin==0 || isempty(data)
     disp('Running example...')
     % note: this isn't perfect... R=4 with 6coil is pushing it (dataset < 25Mb for github)
     load phantom3D_6coil.mat
-    mask = zeros(size(data,1),size(data,2),size(data,3));
+    mask = false(size(data,1),size(data,2),size(data,3));
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
-    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % shifted
     %mask(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),:) = 1; % self calibration
     varargin{1} = 'cal'; varargin{2} = data(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
@@ -38,11 +38,11 @@ end
 %% setup
 
 % default options
-opts.width = 4; % kernel width: [x y z] or scalar
-opts.radial = 1; % use radial kernel [1 or 0]
+opts.width = 3; % kernel width: [x y z] or scalar
+opts.radial = 0; % use radial kernel [1 or 0]
 opts.loraks = 0; % phase constraint (loraks)
 opts.tol = 1e-7; % tolerance (fraction change in norm)
-opts.maxit = 1e4; % maximum no. iterations
+opts.maxit = 1e3; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.gpu = 1; % use GPU, if available (often faster without)
@@ -66,14 +66,13 @@ end
 if ndims(data)<3 || ndims(data)>4 || ~isfloat(data) || isreal(data)
     error('''data'' must be a 4d complex float array.')
 end
-[nx ny nz nc] = size(data);
-
 if numel(opts.width)==1
     opts.width = [1 1 1] * opts.width;
 elseif numel(opts.width)~=3
-    error('width must have 3 elements');
+    error('width must have 1 or 3 elements');
 end
-if nz==1; opts.width(3) = 1; end % for 2D case
+[nx ny nz nc] = size(data);
+if nz==1; opts.width(3) = 1; end % handle 2D case
 
 % convolution kernel indicies
 [x y z] = ndgrid(-ceil(opts.width(1)/2):ceil(opts.width(1)/2), ...
@@ -150,13 +149,13 @@ if ~isempty(opts.cal)
 
     cal = cast(opts.cal,'like',data);
     AA = make_data_matrix(cal,opts);
-    [V,~] = svd(AA);
+    [V W] = svd(AA); % could truncate V based on W...
 
 end
 
 %% Cadzow algorithm
 
-mask = data ~= 0; % sampling mask
+mask = (data ~= 0); % sampling mask
 ksp = zeros(size(data),'like',data);
 
 for iter = 1:opts.maxit
@@ -177,11 +176,10 @@ for iter = 1:opts.maxit
     % row space and singular values
     if isempty(opts.cal)
         [V W] = svd(AA);
-        W = diag(W);
+        W = sqrt(diag(W));
     else
-        W = svd(AA);
+        W = sqrt(svd(AA));
     end
-    W = sqrt(gather(W));
     
     % minimum variance filter
     f = max(0,1-noise_floor.^2./W.^2); 
@@ -194,20 +192,20 @@ for iter = 1:opts.maxit
     norms(1,iter) = norm(W,1); % nuclear norm 
     norms(2,iter) = norm(W,2); % Frobenius norm
     if iter==1
-        tol(iter) = opts.tol;
+        tol(iter) = cast(opts.tol,'like',norms);
     else
         tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
     end
     converged = sum(tol<opts.tol) > 10;
     
     % display progress every 5 seconds
-    if iter==1 || toc(t) > 5 || converged
-         if exist('t','var') && ~exist('itspersec','var')
-            itspersec = (iter-1)/toc(t);
-            fprintf('Iterations per second: %.2f\n',itspersec);
-        end       
-        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts);
-        t = tic();
+    if iter==1
+        t(1:2) = tic(); % global/display timers
+    elseif toc(t(2)) > 5 || converged
+        if t(1)==t(2)
+            fprintf('Iterations per second: %.2f\n',(iter-1)/toc(t(2)));
+        end
+        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts); t(2) = tic();          
     end
 
     % finish when nothing left to do
@@ -215,7 +213,8 @@ for iter = 1:opts.maxit
  
 end
 
-fprintf('Iterations performed: %i\n',iter);
+fprintf('Iterations performed: %i (%.0f sec)\n',iter,toc(t(1)));
+if opts.gpu; ksp = gather(ksp); end % return on CPU
 if nargout==0; clear; end % avoid dumping to screen
 
 %% make normal calibration matrix (low memory)
@@ -243,7 +242,7 @@ for j = 1:nk
         z = opts.kernel.z(k);
         col = circshift(data,[x y z]); % cols of A
 
-        % fill normal array (conjugate symmetric)
+        % fill normal matrix (conjugate symmetric)
         tmp = reshape(row,[],nc)' * reshape(col,[],nc);
         AA(:,j,:,k) = tmp;
         AA(:,k,:,j) = tmp';
@@ -278,16 +277,15 @@ for j = 1:nk
         tmp = reshape(col,[],nc) * squeeze(F(:,j,:,k));
         tmp = reshape(tmp,nx,ny,nz,nc);
 
-        % sum along rows      
+        % average along rows      
         x = opts.kernel.x(k);
         y = opts.kernel.y(k);
         z = opts.kernel.z(k);
-        ksp = ksp + circshift(tmp,-[x y z]);
+        ksp = ksp + circshift(tmp,-[x y z]) / nk;
     
     end
     
 end
-ksp = ksp / nk; % average
 
 %% show plots of various things
 function display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts)

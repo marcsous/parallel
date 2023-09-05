@@ -8,7 +8,7 @@ function ksp = sake2(data,varargin)
 %
 % Conjugate symmetry requires the center of kspace to be
 % at the center of the array so that flip works correctly.
-% Ditto separate calibration data (doesn't work well).
+% Ditto for separate calibration data.
 %
 % Inputs:
 %  -data [nx ny nc]: 2D kspace data array from nc coils
@@ -25,15 +25,15 @@ function ksp = sake2(data,varargin)
 
 if nargin==0
     disp('Running example...')
-    load head
+    load phantom
     data = fftshift(fft2(data));
     mask = false(256,256);
-    R = 4; % speedup factor
-    mask(:,1:R:end) = 1; % undersampling
+    R = 3; mask(:,1:R:end) = 1; % undersampling
     %mask(:,125:133) = 1; % self calibration (or separate)
     varargin{1} = 'width'; varargin{2} = R+2; % specify kernel width   
     varargin{3} = 'cal'; varargin{4} = data(:,125:133,:); % separate calibation
     %varargin{5} = 'loraks'; varargin{6} = 1; % employ conjugate symmetry 
+    %data=1e-6*complex(randn(size(data)),randn(size(data)));
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -41,9 +41,9 @@ end
 
 % default options
 opts.width = 4; % kernel width
-opts.radial = 1; % use radial kernel
+opts.radial = 0; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
-opts.tol = 1e-5; % tolerance (fraction change in norm)
+opts.tol = 0e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
@@ -135,9 +135,8 @@ if ~isempty(opts.cal)
         error('Calibration data has %i coils (data has %i).',size(opts.cal,3),nc);
     end
 
-    cal = cast(opts.cal,'like',data);
-    A = make_data_matrix(cal,opts);
-    [V,~] = svd(A'*A); clear cal;
+    A = make_data_matrix(cast(opts.cal,'like',data),opts);
+    [V W] = svd(A'*A); W = sqrt(diag(W));
     
 end
 
@@ -165,6 +164,7 @@ for iter = 1:opts.maxit
     
     % minimum variance filter
     f = max(0,1-noise_floor.^2./W.^2);
+    f(:)=1;f(35:end)=0;
     A = A * (V * diag(f) * V');
     
     % undo hankel structure
