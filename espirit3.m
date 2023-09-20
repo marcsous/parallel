@@ -17,15 +17,16 @@ if nargin==0
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % shifted
     mask(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
-    varargin = {'std',1e-5}; % set some options
+    varargin = {'std',1e-5,'beta',0.1}; % set some options
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
 %% options
 
-opts.width = 3; % kernel width
+opts.width = 3; % kernel width (scalar)
 opts.radial = 0; % use radial kernel
 opts.ni = 1; % no. image components
+opts.tol = 1e-6; % pcg tolerange
 opts.maxit = 1000; % max pcg iterations
 opts.std = []; % noise std dev, if available
 opts.lambda = 0; % L1 sparsity regularization
@@ -95,19 +96,20 @@ fprintf('ESPIRIT acceleration = %.2f\n',R)
 acs = cconvn(mask,kernel.mask)==nk;
 na = nnz(acs);
 
+% expand coils (save looping)
+acs = repmat(acs,[1 1 1 nc]);
+
 fprintf('ESPIRIT ACS lines = %i\n',round(na/nx));
 
 %% calibration matrix
-A = zeros(na,nc,nk,'like',data);
+A = zeros(na*nc,nk,'like',data);
 
 for k = 1:nk
     x = kernel.x(k);
     y = kernel.y(k);
-    z = kernel.z(k);   
-    for c = 1:nc
-        tmp = circshift(data(:,:,:,c),[x y z]);
-        A(:,c,k) = tmp(acs);
-    end
+    z = kernel.z(k);
+    tmp = circshift(data,[x y z]); 
+    A(:,k) = tmp(acs);
 end
 
 % put in matrix form
@@ -164,15 +166,18 @@ Ab = reshape(sum(Ab,4),[],1);
 if opts.lambda
     im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
 else
-    im = pcg(AA,Ab,0,opts.maxit);
+    im = pcg(AA,Ab,opts.tol,opts.maxit);
 end
 
 % display
 im = reshape(im,nx,ny,nz,opts.ni);
-slice = floor(nx/2+1); % the middle slice in x
-imagesc(squeeze(abs(im(slice,:,:,:))));
-title(sprintf('slice %i (R=%.1f)',slice,R));
-xlabel('z'); ylabel('y'); drawnow;
+slice = floor(nx/2+1); % middle slice in x
+for k = 1:opts.ni
+    subplot(1,opts.ni,k);
+    imagesc(squeeze(abs(im(slice,:,:,k))));
+    title(sprintf('ESPIRIT component %i',k));
+    xlabel('z'); ylabel('y'); drawnow;
+end
 
 % avoid dumping output to screen
 if nargout==0; clear; end

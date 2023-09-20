@@ -23,6 +23,7 @@ end
 opts.width = 5; % kernel width
 opts.radial = 0; % use radial kernel
 opts.ni = 2; % no. image components
+opts.tol = 1e-6; % pcg tolerange
 opts.maxit = 1000; % pcg max iterations
 opts.std = []; % noise std dev, if available
 opts.lambda = 0; % L1 sparsity regularization
@@ -85,18 +86,19 @@ fprintf('ESPIRIT acceleration = %.2f\n',R)
 acs = cconvn(mask,kernel.mask)==nk;
 na = nnz(acs);
 
+% expand coils (save looping)
+acs = repmat(acs,[1 1 nc]);
+
 fprintf('ESPIRIT ACS lines = %i\n',round(na/nx));
 
 %% calibration matrix
-A = zeros(na,nc,nk,'like',data);
+A = zeros(na*nc,nk,'like',data);
 
 for k = 1:nk
     x = kernel.x(k);
     y = kernel.y(k);
-    for c = 1:nc
-        tmp = circshift(data(:,:,c),[x y]);
-        A(:,c,k) = tmp(acs);
-    end
+    tmp = circshift(data,[x y]); 
+    A(:,k) = tmp(acs);
 end
 
 % put in matrix form
@@ -152,13 +154,11 @@ Ab = bsxfun(@times,conj(C),fft2(data));
 Ab = reshape(sum(Ab,3),[],1);
 
 % solve by pcg
-tic
 if opts.lambda
     im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
 else
-    im = pcg(AA,Ab,0,opts.maxit);
+    im = pcg(AA,Ab,opts.tol,opts.maxit);
 end
-toc
 
 % display
 im = reshape(im,nx,ny,opts.ni);
