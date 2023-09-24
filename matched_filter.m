@@ -1,14 +1,13 @@
 function [im coils] = matched_filter(data,np)
-
 % Matched filter coil combination (Walsh MRM 2000;43:682-690)
 %
 % Inputs:
-%  data are the complex images [nx ny (nz) ncoils] 
-%  np is no. pixels in the neighborhood (default 200)
+%  data is complex images [nx ny (nz) nc] 
+%  np is no. pixels in the neighborhood
 %
 % Output:
-%  im is the [nx ny nz ni) combined image
-%  coils are the optimal SNR coil filters 
+%  im is the [nx ny nz] combined image
+%  coils are the optimal coil filters 
 
 % run example
 if nargin==0
