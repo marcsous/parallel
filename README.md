@@ -5,7 +5,7 @@ A few parallel MRI reconstruction algorithms (HOMODYNE GRAPPA2D GRAPPA3D SAKE2D 
 
 David O. Walsh, Arthur F. Gmitro, Michael W. Marcellin
 
-https://doi.org/10.1002/(SICI)1522-2594(200005)43:5<682::AID-MRM10>3.0.CO;2-G
+https://pubmed.ncbi.nlm.nih.gov/10800033/
 
 ## Generalized autocalibrating partially parallel acquisitions (GRAPPA)
 
