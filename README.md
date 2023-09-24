@@ -1,7 +1,7 @@
 # parallel
 A few parallel MRI reconstruction algorithms (HOMODYNE GRAPPA2D GRAPPA3D SAKE2D SAKE3D DHE2D). MATLAB implementations. May require functions from [util](https://github.com/marcsous/util).
 
-## Adaptive reconstruction of phased array MR imagery (MATCHED FILTER)
+## Adaptive reconstruction of phased array MR imagery (Matched Filter)
 
 David O. Walsh, Arthur F. Gmitro, Michael W. Marcellin
 
@@ -41,6 +41,4 @@ Danny Barash, Matan Gavish
 
 https://arxiv.org/pdf/1405.7511v2 
 
-Code Supplement for "Optimal Shrinkage of Singular Values"
-
-https://purl.stanford.edu/kv623gt2817
+Code Supplement: https://purl.stanford.edu/kv623gt2817
