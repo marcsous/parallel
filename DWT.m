@@ -1,40 +1,44 @@
 classdef DWT
     
-    % wavelet transform without the agonizing pain
-    %
-    % basically it takes care of the junk behind the
-    % scenes so that dwt/idwt is as easy as fft/ifft
+    % wavelet transform without the agonizing pain.
+    % basically takes care of the junk behind the
+    % scenes so dwt/idwt is as easy as fft/ifft.
     %
     % notes:
     % -always assumes periodic boundary conditions
-    % -relaxed about input shape (vectorized ok) for pcg
-    % -use Q.thresh(x,sparsity) to do soft thresholding
-    %  to a given sparsity (e.g. 0.3 <=> 30% zeros)
+    % -relaxed about input shape (pcg vectorized ok) 
+    % -Q.thresh(x,sparsity) does soft thresholding
+    %  to a given sparsity (e.g. 0.25 => 25% zeros)
     %
-    % BUGFIX (for older matlab versions)
-    % -dwt is hardcoded to use double. to make it work
-    %  with gpuArray edit the following file:
+    % BUGFIX 1 (for older matlab versions)
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt3.m
+    % < Z = zeros(sX(1),2*sX(2)-1,sX(3));
+    % > Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
     %
-    %  /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt3.m
-    %
-    %  Z = zeros(sX(1),2*sX(2)-1,sX(3));
-    %  Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
+    % BUGFIX 2 (for older matlab versions)
+    % /usr/local/MATLAB/R2018b/toolbox/matlab/datatypes/cell2mat.m
+    % < cisobj = isobject(c{1});
+    % > if isa(c{1},'gpuArray'); cisobj = ~isnumeric(c{1}); else; cisobj = isobject(c{1}); end
     %
     % Example:
-    %   x = (1:8) + 0.1*randn(1,8,'double');
+    %   x = (1:8) + 0.1*randn(1,8);
     %   Q = DWT(size(x),'db2');
     %   y = Q * x; % forward
     %   z = Q'* y; % inverse
     %   norm(x-z,Inf)
-    %     ans = 2.3395e-12
-    %   z = Q.thresh(x,0.3); % 30% zeros
+    %     ans = 2.4203e-12
+    %   z = Q.thresh(x,0.25); % 25% zeros
     %   norm(x-z,Inf)
-    %     ans = 0.1069
+    %     ans = 0.1426
     %   [x;z]
     %     ans =
-    %       0.9898    1.9759    3.0319    4.0313    4.9135    5.9970    6.9835    8.0628
-    %       0.9611    1.9924    2.9702    3.9353    4.9038    5.9427    6.9627    7.9558
-   
+    %       1.0490    2.0739    3.1712    3.9806    4.7862    5.9160    7.1355    7.8928
+    %       1.0108    2.0900    3.0785    3.8766    4.7257    5.9381    7.0532    7.7502
+    %   Q * [x;z]
+    %     ans =
+    %       4.7439    3.9272    6.3288   10.4595   -1.0532    0.0391   -0.0852    3.7309
+    %       4.6587    3.8420    6.2436   10.3743   -0.9680         0         0    3.6456
+       
     properties (SetAccess = private)
         sizeINI
         filters
@@ -49,24 +53,22 @@ classdef DWT
         function obj = DWT(sizeINI,wname)
             
             if nargin<1
-                error('sizeINI is required');
+                error('sizeINI is required.');
             end
             if nargin<2
                 wname = 'db2'; % orthogonal
             end
             if ~isnumeric(sizeINI) || ~isvector(sizeINI)
-                error('sizeINI must be the output of size()');
+                error('sizeINI must be the output of size().');
             end
-            while numel(sizeINI) && sizeINI(end)==1
+            while numel(sizeINI)>2 && sizeINI(end)==1
                 sizeINI(end) = []; % remove trailing ones
             end
             if any(sizeINI==0) || numel(sizeINI)>3
-                error('only 1d, 2d or 3d supported');
+                error('only 1d, 2d or 3d supported.');
             end
-            if numel(sizeINI)<=2 && mod(max(sizeINI),2)
-                error('only even dimensions supported');
-            elseif numel(sizeINI)>2 && any(mod(sizeINI,2))
-                error('only even dimensions supported');
+            if any(sizeINI>1 & mod(sizeINI,2))
+                error('only even dimensions supported.');
             end
             obj.sizeINI = reshape(sizeINI,1,[]);
             
@@ -82,12 +84,9 @@ classdef DWT
         function y = mtimes(obj,x)
             
             % number of coils
-            nc = numel(x) / prod(obj.sizeINI);
-            if mod(nc,1)
-                error('size(x) not compatible with sizeINI [%s]',num2str(obj.sizeINI));
-            end
-
-            % make it respect class
+            [nc dim sz] = get_coils(obj,x);
+            
+            % make dwt respect class
             LoD = obj.filters.LoD;
             HiD = obj.filters.HiD;
             LoR = obj.filters.LoR;
@@ -102,10 +101,17 @@ classdef DWT
             % allow looping over coil dimension            
             if nc>1
                 
-                y = reshape(x,prod(obj.sizeINI),nc);
+                % expand coil dimension
+                y = reshape(x,sz);
                 
+                % indices for the expanded array
+                ix = cell(size(sz));
+                for d = 1:numel(ix); ix{d} = ':'; end
+                
+                % transform one coil at a time
                 for c = 1:nc
-                    y(:,c) = reshape(obj * y(:,c),[],1);
+                    ix{dim} = c;
+                    y(ix{:}) = obj * reshape(y(ix{:}),obj.sizeINI);
                 end
                 
                 y = reshape(y,size(x)); % original size
@@ -113,8 +119,8 @@ classdef DWT
             else
                 
                 % correct shape
-                x = reshape(x,[obj.sizeINI 1]);
-                
+                x = reshape(x,obj.sizeINI);
+
                 if obj.trans==0
                     
                     % forward transform
@@ -128,7 +134,7 @@ classdef DWT
                         wt = dwt3(x,{LoD,HiD,LoR,HiR},'mode',obj.mode);
                         y = cell2mat(wt.dec);
                     else
-                        error('only 1d, 2d or 3d supported');
+                        error('only 1d, 2d or 3d supported.');
                     end
                     
                 else
@@ -154,7 +160,7 @@ classdef DWT
                         wt.dec = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2],[obj.sizeINI(3)/2 obj.sizeINI(3)/2]);
                         y = idwt3(wt);
                     else
-                        error('only 1d, 2d or 3d supported');
+                        error('only 1d, 2d or 3d supported.');
                     end
                     
                 end
@@ -169,30 +175,38 @@ classdef DWT
             if ~exist('sparsity','var')
                 sparsity = 0.25; % default
             elseif ~isscalar(sparsity) || ~isreal(sparsity) || ~isnumeric(sparsity) || sparsity<0 || sparsity>1
-                error('sparsity must be a scalar between 0 and 1')
+                error('sparsity must be a scalar between 0 and 1.')
             end
             
             % to wavelet domain
             y = obj * x;
 
-            % no. coils
-            nc = numel(x) / prod(obj.sizeINI);
+            % number of coils
+            [nc dim sz] = get_coils(obj,x);
             
-            % separate coils            
-            y = reshape(y,[],nc);
+            % expand coil dimension            
+            y = reshape(y,sz);
 
-            % soft-threshold to a target sparsity
-            tmp = abs(y);
-            [~,ok] = sort(tmp,'ascend');
-            k = round(size(y,1) * sparsity);
+            % indices for the expanded array
+            ix = cell(size(sz));
+            for d = 1:numel(ix); ix{d} = ':'; end
+                
+            % threshold one coil at a time
+            for c = 1:nc
+                
+                if dim; ix{dim} = c; end
+                absy = abs(y(ix{:}));
+                signy = sign(y(ix{:}));
+                
+                [~,k] = sort(absy(:),'ascend');
+                maxk = round(numel(k) * sparsity);
+                
+                thresh = absy(k(maxk)); % soft threshold
+                y(ix{:}) = max(0,absy-thresh).*signy;
 
-            if k>0
-                for c = 1:nc
-                    %y(ok(1:k,c),c) = 0; % hard threshold
-                    thresh = tmp(ok(k,c),c); % soft threshold
-                    y(:,c) = max(0,tmp(:,c)-thresh).*sign(y(:,c));
-                end
             end
+
+            y = reshape(y,size(x)); % original size
 
             % to image domain
             y = obj' * y;
@@ -208,140 +222,47 @@ classdef DWT
             
         end
         
+        %% get number of coils
+        function [nc dim sz] = get_coils(obj,x)
+            
+            % number of coils
+            nc = numel(x) / prod(obj.sizeINI);
+            
+            % coil dimension
+            dim = 0;
+            for d = 1:max(ndims(x),numel(obj.sizeINI))
+                if d>numel(obj.sizeINI)
+                    sizeINI_d = 1;
+                else
+                    sizeINI_d = obj.sizeINI(d);
+                end
+                
+                if size(x,d)~=sizeINI_d
+                    if dim==0
+                        dim = d;
+                    else
+                        dim = -1; % error: more than one dim
+                    end
+                end
+            end
+            
+            % catch problems
+            if mod(nc,1) || dim<0
+                error('size(x)=[%s] not compatible with sizeINI=[%s].',num2str(size(x),'%i '),num2str(obj.sizeINI,'%i '));
+            end
+            
+            % expanded array dimensions
+            if dim==0 || size(x,dim)==nc
+                sz = size(x);
+            else
+                sz = [obj.sizeINI(1:dim) obj.sizeINI(dim:end)];
+                dim = dim+1;
+                sz(dim) = nc;
+            end
+
+        end
+        
     end
     
 end
 
-%% modified version of cell2mat to allow gpuArray
-
-function m = cell2mat(c)
-%CELL2MAT Convert the contents of a cell array into a single matrix.
-%   M = CELL2MAT(C) converts a multidimensional cell array with contents of
-%   the same data type into a single matrix. The contents of C must be able
-%   to concatenate into a hyperrectangle. Moreover, for each pair of
-%   neighboring cells, the dimensions of the cell's contents must match,
-%   excluding the dimension in which the cells are neighbors. This constraint
-%   must hold true for neighboring cells along all of the cell array's
-%   dimensions.
-%
-%   The dimensionality of M, i.e. the number of dimensions of M, will match
-%   the highest dimensionality contained in the cell array.
-%
-%   CELL2MAT is not supported for cell arrays containing cell arrays or
-%   objects.
-%
-%	Example:
-%	   C = {[1] [2 3 4]; [5; 9] [6 7 8; 10 11 12]};
-%	   M = cell2mat(C)
-%
-%	See also MAT2CELL, NUM2CELL
-
-% Copyright 1984-2010 The MathWorks, Inc.
-
-% Error out if there is no input argument
-if nargin==0
-    error(message('MATLAB:cell2mat:NoInputs'));
-end
-% short circuit for simplest case
-elements = numel(c);
-if elements == 0
-    m = [];
-    return
-end
-if elements == 1
-    if isnumeric(c{1}) || ischar(c{1}) || islogical(c{1}) || isstruct(c{1})
-        m = c{1};
-        return
-    end
-end
-% Error out if cell array contains mixed data types
-cellclass = class(c{1});
-ciscellclass = cellfun('isclass',c,cellclass);
-if ~all(ciscellclass(:))
-    error(message('MATLAB:cell2mat:MixedDataTypes'));
-end
-
-% Error out if cell array contains any cell arrays or objects
-ciscell = iscell(c{1});
-if isa(c{1},'gpuArray')
-    cisobj = isobject(classUnderlying(c{1}));
-else
-    cisobj = isobject(c{1});
-end
-if cisobj || ciscell
-    error(message('MATLAB:cell2mat:UnsupportedCellContent'));
-end
-
-% If cell array of structures, make sure the field names are all the same
-if isstruct(c{1})
-    cfields = cell(elements,1);
-    for n=1:elements
-        cfields{n} = fieldnames(c{n});
-    end
-    % Perform the actual field name equality test
-    if ~isequal(cfields{:})
-        error(message('MATLAB:cell2mat:InconsistentFieldNames'));
-    end
-end
-
-% If cell array is 2-D, execute 2-D code for speed efficiency
-if ndims(c) == 2
-    rows = size(c,1);
-    cols = size(c,2);   
-    if (rows < cols)
-        m = cell(rows,1);
-        % Concatenate one dim first
-        for n=1:rows
-            m{n} = cat(2,c{n,:});
-        end
-        % Now concatenate the single column of cells into a matrix
-        m = cat(1,m{:});
-    else
-        m = cell(1, cols);
-        % Concatenate one dim first
-        for n=1:cols
-            m{n} = cat(1,c{:,n});
-        end    
-        % Now concatenate the single column of cells into a matrix
-        m = cat(2,m{:});
-    end
-    return
-end
-
-csize = size(c);
-% Treat 3+ dimension arrays
-
-% Construct the matrix by concatenating each dimension of the cell array into
-%   a temporary cell array, CT
-% The exterior loop iterates one time less than the number of dimensions,
-%   and the final dimension (dimension 1) concatenation occurs after the loops
-
-% Loop through the cell array dimensions in reverse order to perform the
-%   sequential concatenations
-for cdim=(length(csize)-1):-1:1
-    % Pre-calculated outside the next loop for efficiency
-    ct = cell([csize(1:cdim) 1]);
-    cts = size(ct);
-    ctsl = length(cts);
-    mref = {};
-
-    % Concatenate the dimension, (CDIM+1), at each element in the temporary cell
-    %   array, CT
-    for mind=1:prod(cts)
-        [mref{1:ctsl}] = ind2sub(cts,mind);
-        % Treat a size [N 1] array as size [N], since this is how the indices
-        %   are found to calculate CT
-        if ctsl==2 && cts(2)==1
-            mref = {mref{1}};
-        end
-        % Perform the concatenation along the (CDIM+1) dimension
-        ct{mref{:}} = cat(cdim+1,c{mref{:},:});
-    end
-    % Replace M with the new temporarily concatenated cell array, CT
-    c = ct;
-end
-
-% Finally, concatenate the final rows of cells into a matrix
-m = cat(1,c{:});
-
-end
