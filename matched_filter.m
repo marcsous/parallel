@@ -1,13 +1,14 @@
 function [im coils] = matched_filter(data,np)
-% Matched filter coil combination (Walsh MRM 2000;43:682-690)
+% Matched filter coil combination.
+% Ref: David Walsh MRM 2000;43:682
 %
 % Inputs:
-%  data is complex images [nx ny (nz) nc] 
-%  np is no. pixels in the neighborhood
+%  data = complex images [nx ny (nz) nc] 
+%  np = no. pixels in the neighborhood (200)
 %
 % Output:
-%  im is the [nx ny nz] combined image
-%  coils are the optimal coil filters 
+%  im = the combined image [nx ny nz] 
+%  coils = the optimal coil filters 
 
 % run example
 if nargin==0
@@ -15,34 +16,43 @@ if nargin==0
 end
 
 %% parse inputs
-if ndims(data)<=2
-    done = data; return;
-elseif ndims(data)==3
+if ndims(data)<=3
     [nx ny nc] = size(data);
-    nz = 1;    
+    nz = 1; dim = 3;
 elseif ndims(data)==4
     [nx ny nz nc] = size(data);
+    dim = 4;
+else
+    error('Too many ''data'' dimensions.');
 end
 
 % 200 pixels is 90% optimal (Walsh)
-if ~exist('np','var'); np = 200; end 
+if ~exist('np','var')
+    np = 200; 
+else
+    np = max(nc,np); % lower limit
+end 
 
-%% neighborhood of nearest np pixels
+%% neighborhood of nearest pixels
 
 % polygon of sides L
 L(3) = min(nz,np^(1/3));
 L(2) = (np/L(3))^(1/2);
 L(1) = (np/L(3))^(1/2);
 
-[x y z] = ndgrid(-fix(L(1)/2):fix(L(1)/2), ...
-                 -fix(L(2)/2):fix(L(2)/2), ...
-                 -fix(L(3)/2):fix(L(3)/2));
+[x y z] = ndgrid(-ceil(L(1)/2):ceil(L(1)/2), ...
+                 -ceil(L(2)/2):ceil(L(2)/2), ...
+                  -fix(L(3)/2):fix(L(3)/2));
 
-[~,k] = sort(x.^2+y.^2+z.^2);
-k = k(1:np); % the nearest np
+% sort by distance
+d = sqrt(x.^2 + y.^2 + z.^2);
+[~,k] = sort(reshape(d,[],1));
+
+% keep nearest np
+k = k(1:np);
 x = x(k); y = y(k); z = z(k);
 
-%% coil calibration matrix
+%% convolution matrix
 coils = zeros(nx,ny,nz,nc,np,'like',data);
 
 for p = 1:np
@@ -50,17 +60,20 @@ for p = 1:np
     coils(:,:,:,:,p) = circshift(data,shift);
 end
 
-% reorder for pagesvd: ni nc nx ny nz
+% reorder for pagesvd: np nc nx ny nz
 coils = permute(coils,[5 4 1 2 3]);
 
-% optimal passband per pixel
-[~,~,coils] = pagesvd(C,'econ');
+% optimal filter per pixel
+[~,~,coils] = pagesvd(coils,'econ');
 
 % largest component only
 coils = coils(:,1,:,:,:);
 
-% reorder for dot: nx ny nz nc ni
+% reorder for dot: nx ny nz nc 1
 coils = permute(coils,[3 4 5 1 2]);
 
+% remove padded z-dimension
+coils = reshape(coils,size(data));
+
 %% final image
-im = sum(coils.*reshape(data,size(coils)),4);
+im = sum(coils.*data,dim);
