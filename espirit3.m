@@ -151,11 +151,9 @@ C = permute(C,[3 4 5 1 2]);
 
 %% switch to GPU (move earlier if pagesvd available on GPU)
 if opts.gpu
-    try
     C = gpuArray(C);
     mask = gpuArray(mask);
     data = gpuArray(data);
-    end
 end
 
 %% solve for image components

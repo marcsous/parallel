@@ -112,8 +112,8 @@ nv = nnz(S > noise_floor);
 V = reshape(V(:,1:nv),nc,nk,nv); % only keep dataspace
 fprintf('ESPIRIT dataspace vectors = %i (out of %i)\n',nv,nc*nk)
 
-%plot(S); xlim([0 numel(S)]); title('svals');
-%line(xlim,[noise_floor noise_floor],'linestyle',':'); drawnow
+plot(S); xlim([0 numel(S)]); title('svals');
+line(xlim,[noise_floor noise_floor],'linestyle',':'); drawnow
 
 % dataspace vectors as convolution kernels
 C = zeros(nv,nc,nx,ny,'like',data);
@@ -139,11 +139,9 @@ C = permute(C,[3 4 1 2]);
 
 %% switch to GPU (move earlier if pagesvd available on GPU)
 if opts.gpu
-    try
     C = gpuArray(C);
     mask = gpuArray(mask);
     data = gpuArray(data);
-    end
 end
 
 %% solve for image components
