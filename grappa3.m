@@ -12,7 +12,7 @@ function ksp = grappa3(data,varargin)
 % Configured some sampling types but may be modified by
 % passing convolution patterns. The idea is to tell the
 % code which neighbors to use to construct the center
-% point in multiple passes (see code around line 102).
+% point in multiple passes (see code around line 85).
 %
 % (1) 2x2 regular: x o x o  pattern = |1 0 1| and |0 1 0|
 %                  o o o o            |0 0 0|     |1 0 1|
@@ -51,11 +51,11 @@ function ksp = grappa3(data,varargin)
 
 if nargin==0
     disp('Running example...')
-    load phantom3D_6coil.mat
+    load phantom3D_6coil.mat % 25Mb file size for github
     mask = false(size(data,1),size(data,2),size(data,3));
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
-    varargin{1} = 'pattern'; varargin{2} = 2; % use pattern 2
+    varargin{1} = 'pattern'; varargin{2} = 2; % specify pattern 2
     %mask(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
     varargin{3} = 'cal'; varargin{4} = data(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
@@ -66,7 +66,7 @@ end
 opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
-opts.pattern = 1; % scalar 1-6 or cell array (see below)
+opts.pattern = 1; % scalar 1-6 or cell array (see above)
 opts.readout = 1; % readout dimension (1, 2 or 3)
 opts.gpu = 1; % use GPU (sometimes faster without)
 
@@ -169,7 +169,8 @@ for j = 0:numel(pattern)
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
 end
 
-% display
+%% display
+
 fprintf('Data size = %s\n',sprintf('%i ',size(data)));
 fprintf('Readout points = %i (out of %i)\n',numel(kx),nx);
 disp(opts);
@@ -189,6 +190,7 @@ if nnz(yz)/numel(yz) < 0.95
 end
 
 %% see if gpu is possible
+
 if opts.gpu
     data = gpuArray(data);
     mask = gpuArray(mask);
@@ -196,7 +198,7 @@ if opts.gpu
     fprintf('GPU found = %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
 end
 
-%% GRAPPA acs
+%% detect acs
 
 if isempty(opts.cal)
     
@@ -231,7 +233,7 @@ if nv<1
     error('Not enough ACS points in kx (%i)',nv);
 end
 
-% detect ACS lines for each sampling pattern
+% ACS lines for each sampling pattern
 for j = 1:numel(pattern)
     
     % center point of the convolution
@@ -260,7 +262,7 @@ for j = 1:numel(pattern)
     
 end
 
-%% GRAPPA calibration: linear equation AX=B
+%% calibration: linear equation AX=B
 t = tic();
 
 % concatenate ky-kz to use indices (easier!)
@@ -282,7 +284,7 @@ for j = 1:numel(pattern)
     dz = dz-c{j}(2);
     
     % convolution matrix
-    for k = 1:numel(dy)
+    for k = 1:nnz(pattern{j})
         
         % neighbors in ky and kz as indices
         idyz = sub2ind(size(yz),y-dy(k),z-dz(k));
@@ -325,7 +327,7 @@ end
 fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc(t);
 
-%% GRAPPA recon in multiple passes
+%% reconstruction in multiple passes
 t = tic();
 
 for j = 1:numel(pattern)
@@ -360,7 +362,7 @@ end
 
 %% display
 
-subplot(1,3,3); im = sum(abs(fft3(ksp)),4);
+subplot(1,3,3); im = sum(abs(ifft3(ksp)),4);
 imagesc(squeeze(im(slice,:,:)));
 title(sprintf('slice %i (R=%.1f)',slice,R));
 xlabel('z'); ylabel('y'); drawnow;
