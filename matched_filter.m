@@ -26,9 +26,9 @@ else
     error('Too many ''data'' dimensions.');
 end
 
-% 200 pixels is 90% optimal (Walsh)
+% np=200 is 90% optimal but most benefit comes <50
 if ~exist('np','var')
-    np = 200; 
+    np = 50;
 else
     np = max(nc,np); % lower limit
 end 
