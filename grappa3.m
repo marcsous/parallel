@@ -9,43 +9,42 @@ function ksp = grappa3(data,varargin)
 % Output:
 % -ksp is reconstructed kspace [nx ny nz nc] 
 %
-% Configured some sampling types but may be modified by
-% passing convolution patterns. The idea is to tell the
-% code which neighbors to use to construct the center
-% point in multiple passes (see code around line 85).
+% Patterns tell the code which neighbors to use to construct
+% the center point in multiple passes. All combinations of
+% 2x use [1 0 1] and/or [1;0;1]. All combinations of 3x use
+% [1 0 0 1] + [1 0 1] and/or [1;0;0;1] + [1;0;1]. Patterns
+% are not unique and some work better than others. The ones
+% below are preconfigured (see code around line 84):
 %
-% (1) 2x2 regular: x o x o  pattern = |1 0 1| and |0 1 0|
-%                  o o o o            |0 0 0|     |1 0 1|
-%                  x o x o            |1 0 1|     |0 1 0|
-%                  o o o o
-%
-% (2) 2x2 shifted: x o x o  pattern = |0 1 0| and |1|
-%                  o o o o            |0 0 0|     |0|
-%                  o x o x            |1 0 1|     |1|
-%                  o o o o            |0 0 0|
-%                  x o x o            |0 1 0|
-%
-% (3) 2x1  y-only: x x x x  pattern = |1|
+% (1) 2x1  y-only: x x x x  pattern = |1|
 %                  o o o o            |0|
 %                  x x x x            |1|
 %                  o o o o
 %
-% (4) 1x2  z-only: x o x o  pattern = |1 0 1|
+% (2) 1x2  z-only: x o x o  pattern = |1 0 1|
 %                  x o x o
 %                  x o x o
 %                  x o x o
 %
-% (5) 2x  shifted: x o x o  pattern = |0 1 0|
-%                  o x o x            |1 0 1|
-%                  x o x o            |0 1 0|
+% (3) 2x  shifted: x o x o  pattern = |1 0 1| or |1|
+%                  o x o x                       |0|
+%                  x o x o                       |1|
 %                  o x o x
+%
+% (4) 2x2 regular: x o x o  pattern = |1 0 1| and |1|
+%                  o o o o                        [0|
+%                  x o x o                        |1|
+%                  o o o o
+%
+% (5) 2x2 shifted: x o x o  pattern = |1 0 1| and |1|
+%                  o o o o                        |0|
+%                  o x o x                        |1|
+%                  o o o o
 %
 % (6) 3x2 regular: x 0 x 0  pattern = |1 0 1|, |1| and |1|
 %                  0 0 0 0                     |0|     |0|
 %                  0 0 0 0                     |0|     |1|
 %                  x 0 x 0                     |1|
-%
-% Note: patterns are not unique for a given sampling type.
 %
 %% example dataset
 
@@ -54,8 +53,8 @@ if nargin==0
     load phantom3D_6coil.mat % 25Mb file size for github
     mask = false(size(data,1),size(data,2),size(data,3));
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
-    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 2
-    varargin{1} = 'pattern'; varargin{2} = 2; % specify pattern 2
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 5
+    varargin{1} = 'pattern'; varargin{2} = 5; % specify pattern 5
     %mask(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
     varargin{3} = 'cal'; varargin{4} = data(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
@@ -91,22 +90,22 @@ elseif ~isscalar(opts.pattern)
     error('pattern must be scalar or cell array');
 else
     switch opts.pattern
-        case 1 % 2x2
-            pattern{1} = [1 0 1; 0 0 0; 1 0 1]; % diagonal
-            pattern{2} = [0 1 0; 1 0 1; 0 1 0]; % crosses
-        case 2 % 2x2
-            pattern{1} = [0 1 0; 0 0 0; 1 0 1; 0 0 0; 0 1 0]; % diamond
-            pattern{2} = [1; 0; 1]; % y only
-        case 3 % 2x1
-            pattern{1} = [1; 0; 1]; % y only
-        case 4 % 1x2
-            pattern{1} = [1 0 1]; % z only
-        case 5 % 2
-            pattern{1} = [0 1 0; 1 0 1; 0 1 0]; % crosses 
-        case 6 % 3x2
-            pattern{1} = [1 0 1]; % z only              
-            pattern{2} = [1; 0; 0; 1]; % y only
-            pattern{3} = [1; 0; 1]; % y only         
+        case 1 % 2x1; 
+            pattern{1} = [1;0;1]; 
+        case 2 % 1x2
+            pattern{1} = [1 0 1]; 
+        case 3 % 2x shifted
+            pattern{1} = [1;0;1]; 
+        case 4 % 2x2 regular
+            pattern{1} = [1;0;1];
+            pattern{2} = [1 0 1];         
+        case 5 % 2x2 shifted
+            pattern{1} = [1 0 1];
+            pattern{2} = [1;0;1]; 
+        case 6 % 3x2 regular
+            pattern{1} = [1 0 1];           
+            pattern{2} = [1;0;0;1];
+            pattern{3} = [1;0;1];        
         otherwise
             error('pattern not recognized');
     end
@@ -142,30 +141,36 @@ end
 % sampling mask [nx ny nz]
 mask = any(data,4); 
 
-%% detect sampling
+%% basic checks
 
 % overall speedup factor
 R = numel(mask)/nnz(mask);
-
-% indices of sampled points
-kx = find(any(any(mask,2),3));
-
-% basic checks
-if max(diff(kx))>1
-    warning('Sampling must be contiguous in kx-direction.')
-end
 if R>nc
     warning('Speed up greater than no. coils (%.2f vs %i)',R,nc);
 end
 
-% sampling pattern after each pass of reconstruction
-for j = 0:numel(pattern)
-    if j==0
-        yz = reshape(any(mask),ny,nz); % initial ky-kz sampling
-    else
-        s{j} = cconvn(yz,pattern{j})==nnz(pattern{j});
-        yz(s{j}) = 1; % we can now consider these lines sampled
+% indices of sampled points
+kx = find(any(any(mask,2),3));
+if max(diff(kx))>1
+    warning('Sampling must be contiguous in kx-direction.')
+end
+
+% center point (target) for the convolution
+for j = 1:numel(pattern)
+    c{j} = floor(1+size(pattern{j})/2); % ok for odd & even sizes
+    if pattern{j}(c{j}(1),c{j}(2))
+        error('Target of pattern %i is not zero: [%s]',j,num2str(pattern{j},'%i '));
     end
+end
+
+% initial ky-kz sampling
+yz = reshape(any(mask),ny,nz);
+fprintf('Kspace coverage before recon: %f\n',1/R);
+
+% sampling pattern after each pass of reconstruction
+for j = 1:numel(pattern)
+    s{j} = cconvn(yz,pattern{j})==nnz(pattern{j});
+    yz(s{j}) = 1; % we can now consider these lines sampled
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
 end
 
@@ -236,14 +241,11 @@ end
 % ACS lines for each sampling pattern
 for j = 1:numel(pattern)
     
-    % center point of the convolution
-    c{j} = floor(1+size(pattern{j})/2);
-    
     % center point expressed as an index
     ind = sub2ind(size(pattern{j}),c{j}(1),c{j}(2));
     
    % find patterns that satisfy acs sampling
-    a = pattern{j}; a(ind) = 1; % center point (i.e. target)
+    a = pattern{j}; a(ind) = 1;
     acs{j} = find(convn(yz,a,'same')==nnz(a)); % can't be sure ACS is symmetric, so can't use cconvn
     na(j) = numel(acs{j});
     
@@ -257,7 +259,7 @@ for j = 1:numel(pattern)
         error('Not enough ACS lines (%i)',na(j));
     end
 
-    % exclude ACS lines from reconstruction
+    % exclude ACS lines from being reconstructed
     if isempty(opts.cal); s{j}(acs{j}) = 0; end
     
 end
