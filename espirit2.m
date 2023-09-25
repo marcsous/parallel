@@ -1,11 +1,11 @@
 function im = espirit2(data,varargin)
-%im = espirit2(data,index,varargin)
+%im = espirit2(data,varargin)
 %
 % Implementation of ESPIRIT (in 2nd-dimension only).
 % Uses pagesvd.cpp mex-file or builtin for R2021b.
 %
 % Inputs:
-% - data is kspace (nx ny nc) with zeros in empty lines
+% - data is kspace (nx ny nc) with zeros in empty points
 %
 % Output:
 % - im is the coil-combined image(s) (nx ny ni)
@@ -112,8 +112,8 @@ nv = nnz(S > noise_floor);
 V = reshape(V(:,1:nv),nc,nk,nv); % only keep dataspace
 fprintf('ESPIRIT dataspace vectors = %i (out of %i)\n',nv,nc*nk)
 
-plot(S); xlim([0 numel(S)]); title('svals');
-line(xlim,[noise_floor noise_floor],'linestyle',':'); drawnow
+%plot(S); xlim([0 numel(S)]); title('svals');
+%line(xlim,[noise_floor noise_floor],'linestyle',':'); drawnow
 
 % dataspace vectors as convolution kernels
 C = zeros(nv,nc,nx,ny,'like',data);
@@ -141,8 +141,8 @@ C = permute(C,[3 4 1 2]);
 if opts.gpu
     try
     C = gpuArray(C);
+    mask = gpuArray(mask);
     data = gpuArray(data);
-    nindex = gpuArray(nindex);
     end
 end
 
@@ -153,11 +153,11 @@ AA = @(x)myespirit(C,x,mask,opts.beta);
 Ab = bsxfun(@times,conj(C),fft2(data));
 Ab = reshape(sum(Ab,3),[],1);
 
-% solve by pcg
+% solve by pcg/minres
 if opts.lambda
     im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
 else
-    im = pcg(AA,Ab,opts.tol,opts.maxit);
+    im = minres(AA,Ab,opts.tol,opts.maxit);
 end
 
 % display

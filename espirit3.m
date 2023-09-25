@@ -1,10 +1,10 @@
 function im = espirit3(data,varargin)
-%im = espirit3(data,index,varargin)
+%im = espirit3(data,varargin)
 %
 % Implementation of ESPIRIT (in 3D).
 %
 % Inputs:
-% - data is kspace (nx ny nz nc) with zeros in empty lines
+% - data is kspace (nx ny nz nc) with zeros in empty points
 %
 % Output:
 % - im is the coil-combined image(s) (nx ny nz ni)
@@ -149,24 +149,27 @@ C = C(:,1:opts.ni,:,:,:);
 % reorder: nx ny nz nc ni
 C = permute(C,[3 4 5 1 2]);
 
-%% solve for image components
-
-% use gpu?
-if opts.gpu && exist('gpuArray','class')
+%% switch to GPU (move earlier if pagesvd available on GPU)
+if opts.gpu
+    try
     C = gpuArray(C);
+    mask = gpuArray(mask);
     data = gpuArray(data);
+    end
 end
+
+%% solve for image components
 
 % linear operators (solve A'Ax=A'b)
 AA = @(x)myespirit(C,x,mask,opts.beta);
 Ab = bsxfun(@times,conj(C),fft3(data));
 Ab = reshape(sum(Ab,4),[],1);
 
-% solve by pcg
+% solve by pcg/minres
 if opts.lambda
     im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
 else
-    im = pcg(AA,Ab,opts.tol,opts.maxit);
+    im = minres(AA,Ab,opts.tol,opts.maxit);
 end
 
 % display
