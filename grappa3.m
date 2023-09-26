@@ -10,25 +10,24 @@ function ksp = grappa3(data,varargin)
 % -ksp is reconstructed kspace [nx ny nz nc] 
 %
 % Patterns tell the code which neighbors to use to construct
-% the center point in multiple passes. All combinations of
-% 2x use [1 0 1] and/or [1;0;1]. All combinations of 3x use
-% [1 0 0 1] + [1 0 1] and/or [1;0;0;1] + [1;0;1]. Patterns
-% are not unique and some work better than others. The ones
-% below are preconfigured (see code around line 84):
+% the center point. Patterns are not unique - they are all
+% just vectors in the SAKE nullspace - but some work better.
+% E.g. 4 neighbors is better than 2 but more calibration is
+% required. Several patterns are preconfigured (line 83).
 %
-% (1) 2x1  y-only: x x x x  pattern = |1|
-%                  o o o o            |0|
-%                  x x x x            |1|
+% (1) 2x1  y-only: x x x x  pattern = |1| or |1 1 1|
+%                  o o o o            |0|    |0 0 0|
+%                  x x x x            |1|    |1 1 1|
 %                  o o o o
 %
-% (2) 1x2  z-only: x o x o  pattern = |1 0 1|
-%                  x o x o
-%                  x o x o
+% (2) 1x2  z-only: x o x o  pattern = |1 0 1| or |1 0 1|
+%                  x o x o                       |1 0 1|
+%                  x o x o                       |1 0 1|
 %                  x o x o
 %
-% (3) 2x  shifted: x o x o  pattern = |1 0 1| or |1|
-%                  o x o x                       |0|
-%                  x o x o                       |1|
+% (3) 2x  shifted: x o x o  pattern = |1| or |1 0 1| or |0 1 0|
+%                  o x o x            |0|               |1 0 1|
+%                  x o x o            |1|               |0 1 0|
 %                  o x o x
 %
 % (4) 2x2 regular: x o x o  pattern = |1 0 1| and |1|
@@ -60,7 +59,7 @@ if nargin==0
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
-%% options
+%% handle options
 
 opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
@@ -91,11 +90,11 @@ elseif ~isscalar(opts.pattern)
 else
     switch opts.pattern
         case 1 % 2x1; 
-            pattern{1} = [1;0;1]; 
+            pattern{1} = [1 1 1;0 0 0;1 1 1]; 
         case 2 % 1x2
-            pattern{1} = [1 0 1]; 
+            pattern{1} = [1 0 1;1 0 1;1 0 1]; 
         case 3 % 2x shifted
-            pattern{1} = [1;0;1]; 
+            pattern{1} = [0 1 0;1 0 1;0 1 0]; 
         case 4 % 2x2 regular
             pattern{1} = [1;0;1];
             pattern{2} = [1 0 1];         
@@ -111,12 +110,12 @@ else
     end
 end
 
-% make logical - catch any bad user defined patterns
-for k = 1:numel(pattern)
-    if ~isnumeric(pattern{k}) || ~ismatrix(pattern{k})
-        error('pattern %k must be numeric matrix',k);
+% make logical - catch any bad user-defined patterns
+for j = 1:numel(pattern)
+    if ~isnumeric(pattern{j}) || ~ismatrix(pattern{j})
+        error('pattern %k must be numeric matrix',j);
     end
-    pattern{k} = logical(pattern{k});
+    pattern{j} = logical(pattern{j});
 end
 
 %% initialize
@@ -155,7 +154,7 @@ if max(diff(kx))>1
     warning('Sampling must be contiguous in kx-direction.')
 end
 
-% center point (target) for the convolution
+% center point (target) of the convolution
 for j = 1:numel(pattern)
     c{j} = floor(1+size(pattern{j})/2); % ok for odd & even sizes
     if pattern{j}(c{j}(1),c{j}(2))
