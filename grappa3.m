@@ -1,6 +1,8 @@
 function ksp = grappa3(data,varargin)
 %
-% Implementation of GRAPPA for 3D images (yz-direction).
+% Implementation of GRAPPA for 3D kspace (yz-direction).
+% All combinations of acceleration in y and z are supported. 
+% Specify the sampling via the option 'pattern'.
 %
 % Inputs:
 % -data: kspace [nx ny nz nc] with zeros in empty lines
@@ -9,11 +11,15 @@ function ksp = grappa3(data,varargin)
 % Output:
 % -ksp is reconstructed kspace [nx ny nz nc] 
 %
+%% Convolution patterns (1D or 2D)
+%
 % Patterns tell the code which neighbors to use to construct
-% the center point. Patterns are not unique - they are all
-% just vectors in the SAKE nullspace - but some work better.
-% E.g. 4 neighbors is better than 2 but more calibration is
-% required. Several patterns are preconfigured (line 83).
+% the center point. E.g. [1 0 1] means use 2 neighbors along
+% the z-direction to fill in the zero (resulting in [1 1 1]). 
+% Patterns are not unique - they are just vectors in the SAKE
+% nullspace - but some work better. 4 neighbors may be better
+% than 2 but 8 may be worse. Several patterns are configured
+% (see code around line 90).
 %
 % (1) 2x1  y-only: x x x x  pattern = |1| or |1 1 1|
 %                  o o o o            |0|    |0 0 0|
@@ -52,7 +58,7 @@ if nargin==0
     load phantom3D_6coil.mat % 25Mb file size for github
     mask = false(size(data,1),size(data,2),size(data,3));
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
-    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % pattern 5
+    mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]);
     varargin{1} = 'pattern'; varargin{2} = 5; % specify pattern 5
     %mask(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
     varargin{3} = 'cal'; varargin{4} = data(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
@@ -64,7 +70,7 @@ end
 opts.idx = -2:2; % readout convolution pattern
 opts.cal = []; % separate calibration, if available
 opts.tol = []; % svd tolerance for calibration
-opts.pattern = 1; % scalar 1-6 or cell array (see above)
+opts.pattern = []; % scalar 1-6 or cell array (see code)
 opts.readout = 1; % readout dimension (1, 2 or 3)
 opts.gpu = 1; % use GPU (sometimes faster without)
 
@@ -86,7 +92,7 @@ if isa(opts.pattern,'cell')
     pattern = opts.pattern; % no error checks
     opts.pattern = 0; % user defined pattern
 elseif ~isscalar(opts.pattern)
-    error('pattern must be scalar or cell array');
+    error('Pattern must be scalar or cell array.');
 else
     switch opts.pattern
         case 1 % 2x1; 
@@ -106,16 +112,22 @@ else
             pattern{2} = [1;0;0;1];
             pattern{3} = [1;0;1];        
         otherwise
-            error('pattern not recognized');
+            error('Pattern not recognized.');
     end
 end
 
-% make logical - catch any bad user-defined patterns
+% catch any bad user-defined patterns
 for j = 1:numel(pattern)
     if ~isnumeric(pattern{j}) || ~ismatrix(pattern{j})
-        error('pattern %k must be numeric matrix',j);
+        error('Pattern %k must be numeric matrix.',j);
     end
     pattern{j} = logical(pattern{j});
+
+    % find center point of the convolution
+    c{j} = floor(1+size(pattern{j})/2); % ok for odd/even size
+    if pattern{j}(c{j}(1),c{j}(2))
+        error('Target of pattern %i is not zero: [%s]',j,num2str(pattern{j}));
+    end
 end
 
 %% initialize
@@ -133,7 +145,7 @@ elseif opts.readout==3
     data = permute(data,[3 2 1 4]);
     if isfield(opts,'cal'); opts.cal = permute(opts.cal,[3 2 1 4]); end
 elseif opts.readout~=1
-    error('readout dimension must be 1, 2 or 3');
+    error('Readout dimension must be 1, 2 or 3');
 end
 [nx ny nz nc] = size(data);
 
@@ -154,14 +166,6 @@ if max(diff(kx))>1
     warning('Sampling must be contiguous in kx-direction.')
 end
 
-% center point (target) of the convolution
-for j = 1:numel(pattern)
-    c{j} = floor(1+size(pattern{j})/2); % ok for odd & even sizes
-    if pattern{j}(c{j}(1),c{j}(2))
-        error('Target of pattern %i is not zero: [%s]',j,num2str(pattern{j},'%i '));
-    end
-end
-
 % initial ky-kz sampling
 yz = reshape(any(mask),ny,nz);
 fprintf('Kspace coverage before recon: %f\n',1/R);
@@ -169,7 +173,7 @@ fprintf('Kspace coverage before recon: %f\n',1/R);
 % sampling pattern after each pass of reconstruction
 for j = 1:numel(pattern)
     s{j} = cconvn(yz,pattern{j})==nnz(pattern{j});
-    yz(s{j}) = 1; % we can now consider these lines sampled
+    yz(s{j}) = 1; % we now consider these lines sampled
     fprintf('Kspace coverage after pass %i: %f\n',j,nnz(yz)/(ny*nz));
 end
 
@@ -221,7 +225,7 @@ else
     cal = cast(opts.cal,'like',data);
     
     if size(cal,4)~=nc || ndims(cal)~=ndims(data)
-        error('separate calibration data must have %i coils.',nc);
+        error('Separate calibration data must have %i coils.',nc);
     end
     
     % phase encode sampling (assume fully sampled)
@@ -234,7 +238,7 @@ end
 
 nv = numel(valid);
 if nv<1
-    error('Not enough ACS points in kx (%i)',nv);
+    error('Not enough ACS points in kx (%i).',nv);
 end
 
 % ACS lines for each sampling pattern
@@ -255,7 +259,7 @@ for j = 1:numel(pattern)
         fprintf('(separate cal)\n');
     end
     if na(j)<1
-        error('Not enough ACS lines (%i)',na(j));
+        error('Not enough ACS lines (%i).',na(j));
     end
 
     % exclude ACS lines from being reconstructed
