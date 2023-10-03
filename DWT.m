@@ -1,50 +1,60 @@
 classdef DWT
-    
+    % obj = DWT(sizeINI,wname) ['db1','db2','db3']
+    %
     % wavelet transform without the agonizing pain.
     % basically takes care of the junk behind the
     % scenes so dwt/idwt is as easy as fft/ifft.
     %
     % notes:
     % -always assumes periodic boundary conditions
-    % -relaxed about input shape (pcg vectorized ok) 
+    % -relaxed about input shape (vectorized ok)
+    % -accepts leading or trailing coil dimensions
     % -Q.thresh(x,sparsity) does soft thresholding
     %  to a given sparsity (e.g. 0.25 => 25% zeros)
     %
-    % BUGFIX 1 (for older matlab versions)
-    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt3.m
-    % < Z = zeros(sX(1),2*sX(2)-1,sX(3));
-    % > Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
-    %
-    % BUGFIX 2 (for older matlab versions)
-    % /usr/local/MATLAB/R2018b/toolbox/matlab/datatypes/cell2mat.m
-    % < cisobj = isobject(c{1});
-    % > if isa(c{1},'gpuArray'); cisobj = ~isnumeric(c{1}); else; cisobj = isobject(c{1}); end
-    %
-    % Example:
+    %% Example:
     %   x = (1:8) + 0.1*randn(1,8);
     %   Q = DWT(size(x),'db2');
     %   y = Q * x; % forward
     %   z = Q'* y; % inverse
     %   norm(x-z,Inf)
-    %     ans = 2.4203e-12
+    %     ans = 2.3801e-12
     %   z = Q.thresh(x,0.25); % 25% zeros
     %   norm(x-z,Inf)
-    %     ans = 0.1426
+    %     ans = 0.2362
     %   [x;z]
     %     ans =
-    %       1.0490    2.0739    3.1712    3.9806    4.7862    5.9160    7.1355    7.8928
-    %       1.0108    2.0900    3.0785    3.8766    4.7257    5.9381    7.0532    7.7502
-    %   Q * [x;z]
+    %       0.9468    1.9106    3.1145    4.0127    4.7686    6.0869    6.9622    8.1000
+    %       0.8835    1.9429    2.9707    3.8405    4.7527    5.8872    6.9622    7.8637
+    %   Q*[x;z]
     %     ans =
-    %       4.7439    3.9272    6.3288   10.4595   -1.0532    0.0391   -0.0852    3.7309
-    %       4.6587    3.8420    6.2436   10.3743   -0.9680         0         0    3.6456
-       
+    %       4.7292    3.8104    6.3904   10.4568   -1.1663    0.1082    0.1412    3.9703
+    %       4.5880    3.6692    6.2492   10.3156   -1.0251         0         0    3.8291
+    %
+    %% Bugfixes (for older matlab versions)
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt3.m
+    % < Z = zeros(sX(1),2*sX(2)-1,sX(3));
+    % > Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
+    %
+    % /usr/local/MATLAB/R2018b/toolbox/matlab/datatypes/cell2mat.m
+    % < cisobj = isobject(c{1});
+    % > if isa(c{1},'gpuArray'); cisobj = ~isnumeric(c{1}); else; cisobj = isobject(c{1}); end
+    %
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/dyadup.m
+    % < zeros(...);
+    % > zeros(...,'like',x);
+    %
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/wextend.m
+    % < validateattributes(x,{'numeric'}
+    % > validateattributes(x,{'numeric','gpuArray'}
+
     properties (SetAccess = private)
         sizeINI
+        wname = 'db1'; % orthogonal
+        mode = 'per'; % periodic
+        trans = false % transpose
         filters
         dec
-        mode = 'per'; % must be periodic
-        trans = 0 % transpose flag (0 or 1)
     end
 
     methods
@@ -54,9 +64,10 @@ classdef DWT
             
             if nargin<1
                 error('sizeINI is required.');
-            end
-            if nargin<2
-                wname = 'db2'; % orthogonal
+            elseif nargin==2
+                obj.wname = wname;
+            elseif nargin>2
+                error('Wrong number of arguments.')
             end
             if ~isnumeric(sizeINI) || ~isvector(sizeINI)
                 error('sizeINI must be the output of size().');
@@ -72,7 +83,7 @@ classdef DWT
             end
             obj.sizeINI = reshape(sizeINI,1,[]);
             
-            [LoD HiD LoR HiR] = wfilters(wname);
+            [LoD HiD LoR HiR] = wfilters(obj.wname);
             obj.filters.LoD = LoD;
             obj.filters.HiD = HiD;
             obj.filters.LoR = LoR;
@@ -80,11 +91,8 @@ classdef DWT
             
         end
         
-        %% y = W*x or y = W'*x
+        %% y = Q*x or y = Q'*x
         function y = mtimes(obj,x)
-            
-            % number of coils
-            [nc dim sz] = get_coils(obj,x);
             
             % make dwt respect class
             LoD = obj.filters.LoD;
@@ -98,40 +106,42 @@ classdef DWT
                 HiR = single(HiR);
             end
             
-            % allow looping over coil dimension            
+            % loop over extra dimensions (coils)
+            [nc dim sx] = get_coils(obj,x);
+            
             if nc>1
-                
+
                 % expand coil dimension
-                y = reshape(x,sz);
+                y = reshape(x,sx);
                 
-                % indices for the expanded array
-                ix = cell(size(sz));
-                for d = 1:numel(ix); ix{d} = ':'; end
+                % indices for each dimension
+                ix = repmat({':'},numel(sx),1);    
                 
-                % transform one coil at a time
+                % transform coils separately
                 for c = 1:nc
                     ix{dim} = c;
-                    y(ix{:}) = obj * reshape(y(ix{:}),obj.sizeINI);
+                    y(ix{:}) = obj * y(ix{:});
                 end
-                
-                y = reshape(y,size(x)); % original size
+
+                % original shape
+                y = reshape(y,size(x)); 
                 
             else
                 
                 % correct shape
-                x = reshape(x,obj.sizeINI);
+                y = reshape(x,obj.sizeINI);
 
                 if obj.trans==0
                     
                     % forward transform
-                    if isvector(x)
-                        [CA CD] = dwt(x,LoD,HiD,'mode',obj.mode);
-                        if isrow(x); y = [CA CD]; else; y = [CA;CD]; end
-                    elseif ndims(x)==2
-                        [CA CH CV CD] = dwt2(x,LoD,HiD,'mode',obj.mode);
+                    if isvector(y)
+                        [CA CD] = dwt(y,LoD,HiD,'mode',obj.mode);
+                        if isrow(y); y = [CA CD]; else; y = [CA;CD]; end
+                    elseif ndims(y)==2
+                        [CA CH CV CD] = dwt2(y,LoD,HiD,'mode',obj.mode);
                         y = [CA CV; CH CD];
-                    elseif ndims(x)==3
-                        wt = dwt3(x,{LoD,HiD,LoR,HiR},'mode',obj.mode);
+                    elseif ndims(y)==3
+                        wt = dwt3(y,{LoD,HiD,LoR,HiR},'mode',obj.mode);
                         y = cell2mat(wt.dec);
                     else
                         error('only 1d, 2d or 3d supported.');
@@ -140,24 +150,24 @@ classdef DWT
                 else
                     
                     % inverse transform
-                    if isvector(x)
-                        if isrow(x)
-                            C = mat2cell(x,1,[obj.sizeINI(2)/2 obj.sizeINI(2)/2]);
+                    if isvector(y)
+                        if isrow(y)
+                            C = mat2cell(y,1,[obj.sizeINI(2)/2 obj.sizeINI(2)/2]);
                         else
-                            C = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],1);
+                            C = mat2cell(y,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],1);
                         end
                         y = idwt(C{1},C{2},LoR,HiR,'mode',obj.mode);
-                    elseif ndims(x)==2
-                        C = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2]);
+                    elseif ndims(y)==2
+                        C = mat2cell(y,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2]);
                         y = idwt2(C{1},C{2},C{3},C{4},LoR,HiR,'mode',obj.mode);
-                    elseif ndims(x)==3
+                    elseif ndims(y)==3
                         wt.sizeINI = obj.sizeINI;
                         wt.filters.LoD = {LoD,LoD,LoD};
                         wt.filters.HiD = {HiD,HiD,HiD};
                         wt.filters.LoR = {LoR,LoR,LoR};
                         wt.filters.HiR = {HiR,HiR,HiR};
                         wt.mode = obj.mode;
-                        wt.dec = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2],[obj.sizeINI(3)/2 obj.sizeINI(3)/2]);
+                        wt.dec = mat2cell(y,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2],[obj.sizeINI(3)/2 obj.sizeINI(3)/2]);
                         y = idwt3(wt);
                     else
                         error('only 1d, 2d or 3d supported.');
@@ -165,101 +175,97 @@ classdef DWT
                     
                 end
                 
+                % original shape
+                y = reshape(y,size(x));
+                
+            end
+            
+            %% get number of coils
+            function [nc dim sx] = get_coils(obj,x)
+                
+                sx = size(x);
+
+                % number of coils
+                nc = prod(sx) / prod(obj.sizeINI);
+                
+                % get first coil dimension
+                dim = 0;
+                for d = 1:numel(sx)
+                    if sx(d)~=dimsize(obj,d)
+                        dim = d;
+                        break;
+                    end
+                end
+
+                % only allow expansion in 1st or last dim (or none)
+                if mod(nc,1)
+                    error('Expansion not compatible with sizeINI=[%s].',num2str(obj.sizeINI,'%i '));
+                end                
+                
+                % expand array dimension, e.g. [2n] => [n 2]
+                if dim>1 || iscolumn(x)
+                    sx = [obj.sizeINI nc];
+                    dim = numel(sx);
+                end
+                
             end
             
         end
         
-        %% threshold small coefficients
-        function y = thresh(obj,x,sparsity)
+        %% threshold wavelet coefficients
+        function [y lambda] = thresh(obj,x,sparsity)
             
-            if ~exist('sparsity','var')
-                sparsity = 0.25; % default
-            elseif ~isscalar(sparsity) || ~isreal(sparsity) || ~isnumeric(sparsity) || sparsity<0 || sparsity>1
+            if nargin<3 || ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<0 || sparsity>1
                 error('sparsity must be a scalar between 0 and 1.')
             end
             
             % to wavelet domain
             y = obj * x;
 
-            % number of coils
-            [nc dim sz] = get_coils(obj,x);
+            % soft threshold all coils together
+            y = reshape(y,[],1);
+
+            absy = abs(y);
+            signy = sign(y);
             
-            % expand coil dimension            
-            y = reshape(y,sz);
-
-            % indices for the expanded array
-            ix = cell(size(sz));
-            for d = 1:numel(ix); ix{d} = ':'; end
-                
-            % threshold one coil at a time
-            for c = 1:nc
-                
-                if dim; ix{dim} = c; end
-                absy = abs(y(ix{:}));
-                signy = sign(y(ix{:}));
-                
-                [~,k] = sort(absy(:),'ascend');
-                maxk = round(numel(k) * sparsity);
-                
-                thresh = absy(k(maxk)); % soft threshold
-                y(ix{:}) = max(0,absy-thresh).*signy;
-
+            v = sort(absy,'ascend');
+            index = round(numel(v) * sparsity);
+            
+            if index==0
+                lambda = cast(0,'like',v);
+            else
+                lambda = v(index);
+                y = signy .* max(absy-lambda,0);
             end
-
-            y = reshape(y,size(x)); % original size
 
             % to image domain
             y = obj' * y;
             
-            y = reshape(y,size(x)); % original size
-            
+            % original shape
+            y = reshape(y,size(x));
+
         end
 
-        %% detect W' and set flag
+        %% detect Q' and set flag
         function obj = ctranspose(obj)
             
             obj.trans = ~obj.trans;
             
         end
-        
-        %% get number of coils
-        function [nc dim sz] = get_coils(obj,x)
+       
+        %% dimension size
+        function n = dimsize(obj,dim)
             
-            % number of coils
-            nc = numel(x) / prod(obj.sizeINI);
-            
-            % coil dimension
-            dim = 0;
-            for d = 1:max(ndims(x),numel(obj.sizeINI))
-                if d>numel(obj.sizeINI)
-                    sizeINI_d = 1;
-                else
-                    sizeINI_d = obj.sizeINI(d);
-                end
-                
-                if size(x,d)~=sizeINI_d
-                    if dim==0
-                        dim = d;
-                    else
-                        dim = -1; % error: more than one dim
-                    end
-                end
-            end
-            
-            % catch problems
-            if mod(nc,1) || dim<0
-                error('size(x)=[%s] not compatible with sizeINI=[%s].',num2str(size(x),'%i '),num2str(obj.sizeINI,'%i '));
-            end
-            
-            % expanded array dimensions
-            if dim==0 || size(x,dim)==nc
-                sz = size(x);
+            if nargin<2
+                n = obj.sizeINI;
+            elseif ~isscalar(dim) || ~isnumeric(dim) || ~isreal(dim) || dim<1 || mod(dim,1)~=0
+                error('Dimension argument must be a positive integer scalar within indexing range.');
+            elseif dim <= numel(obj.sizeINI)
+                n = obj.sizeINI(dim);
             else
-                sz = [obj.sizeINI(1:dim) obj.sizeINI(dim:end)];
-                dim = dim+1;
-                sz(dim) = nc;
+                n = 1;
             end
-
+            
         end
         
     end

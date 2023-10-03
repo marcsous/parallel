@@ -1,10 +1,11 @@
 function im = espirit3(data,varargin)
 %im = espirit3(data,varargin)
 %
-% Implementation of ESPIRIT (in 3D).
+% Implementation of ESPIRIT 3D.
 %
 % Inputs:
-% - data is kspace (nx ny nz nc) with zeros in empty points
+% - data is kspace [nx ny nz nc] with zeros in empty points
+% - varargin options pairs (e.g. 'width',4)
 %
 % Output:
 % - im is the coil-combined image(s) (nx ny nz ni)
@@ -17,8 +18,9 @@ if nargin==0
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]); % shifted
     mask(size(data,1)/2+(-9:9),size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
-    varargin = {'std',1e-5,'beta',0.1}; % set some options
-    data = bsxfun(@times,data,mask); clearvars -except data varargin
+    varargin = {'std',1e-5,'beta',0.01,'sparsity',0.25};
+    data = bsxfun(@times,data,mask);
+    clearvars -except data varargin
 end
 
 %% options
@@ -26,10 +28,10 @@ end
 opts.width = 3; % kernel width (scalar)
 opts.radial = 0; % use radial kernel
 opts.ni = 1; % no. image components
-opts.tol = 1e-6; % pcg tolerange
+opts.tol = 1e-6; % pcg tolerance
 opts.maxit = 1000; % max pcg iterations
 opts.std = []; % noise std dev, if available
-opts.lambda = 0; % L1 sparsity regularization
+opts.sparsity = 0; % L1 sparsity (0.1=10% zeros)
 opts.beta = 0; % L2 Tikhonov regularization
 opts.gpu = 1; % use gpu, if available
 
@@ -102,22 +104,22 @@ acs = repmat(acs,[1 1 1 nc]);
 fprintf('ESPIRIT ACS lines = %i\n',round(na/nx));
 
 %% calibration matrix
-A = zeros(na*nc,nk,'like',data);
+C = zeros(na*nc,nk,'like',data);
 
 for k = 1:nk
     x = kernel.x(k);
     y = kernel.y(k);
     z = kernel.z(k);
     tmp = circshift(data,[x y z]); 
-    A(:,k) = tmp(acs);
+    C(:,k) = tmp(acs);
 end
 
 % put in matrix form
-A = reshape(A,na,nc*nk);
-fprintf('ESPIRIT calibration matrix = %ix%i\n',size(A));
+C = reshape(C,na,nc*nk);
+fprintf('ESPIRIT calibration matrix = %ix%i\n',size(C));
 
 % define dataspace vectors
-[~,S,V] = svd(A,'econ');
+[~,S,V] = svd(C,'econ');
 S = diag(S);
 nv = nnz(S > noise_floor);
 V = reshape(V(:,1:nv),nc,nk,nv); % only keep dataspace
@@ -149,7 +151,11 @@ C = C(:,1:opts.ni,:,:,:);
 % reorder: nx ny nz nc ni
 C = permute(C,[3 4 5 1 2]);
 
-%% switch to GPU (move earlier if pagesvd available on GPU)
+% remove weird common phase
+C = bsxfun(@times,C,exp(-i*angle(sum(C,4))));
+
+%% switch to GPU (move up if pagesvd available on GPU)
+
 if opts.gpu
     C = gpuArray(C);
     mask = gpuArray(mask);
@@ -158,20 +164,28 @@ end
 
 %% solve for image components
 
-% linear operators (solve A'Ax=A'b)
-AA = @(x)myespirit(C,x,mask,opts.beta);
+% min (1/2)||A'Ax-A'b||_2 + lambda||Qx||_1
+AA = @(x)myfunc(C,x,mask,opts.beta);
 Ab = bsxfun(@times,conj(C),fft3(data));
 Ab = reshape(sum(Ab,4),[],1);
-
-% solve by pcg/minres
-if opts.lambda
-    im = pcgL1(AA,Ab,opts.lambda,opts.maxit);
-else
-    im = minres(AA,Ab,opts.tol,opts.maxit);
+try
+    Q = DWT([nx ny nz],'db1'); % DWT wavelet transform
+catch
+    Q = 1;
+    warning('DWT wavelet transform failed => using sparsity in image.');
 end
 
-% display
+% solve by pcg/minres
+if opts.sparsity
+    [im lambda] = pcgL1(AA,Ab,opts.sparsity,opts.tol,opts.maxit,Q);
+    z = abs(Q * im); sparsity = nnz(z <= 2*eps(max(z))) / numel(z);
+    fprintf('ESPIRIT sparsity %f (lambda=%.2e)\n',sparsity,lambda);
+else
+    [im,~,~,~,resvec] = minres(AA,Ab,opts.tol,opts.maxit);
+end
 im = reshape(im,nx,ny,nz,opts.ni);
+
+% display
 slice = floor(nx/2+1); % middle slice in x
 for k = 1:opts.ni
     subplot(1,opts.ni,k);
@@ -184,7 +198,7 @@ end
 if nargout==0; clear; end
 
 %% ESPIRIT operator
-function r = myespirit(C,im,mask,beta)
+function r = myfunc(C,im,mask,beta)
 
 [nx ny nz nc ni] = size(C);
 im = reshape(im,nx,ny,nz,1,ni);

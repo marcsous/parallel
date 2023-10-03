@@ -1,8 +1,8 @@
 function ksp = grappa3(data,varargin)
-%
+%ksp = grappa3(data,varargin)
 % Implementation of GRAPPA for 3D kspace (yz-direction).
-% All combinations of acceleration in y and z are supported. 
-% Specify the sampling via the option 'pattern'.
+% All accelerations in y and z are supported. Specify 
+% the sampling via the option 'pattern' (see below).
 %
 % Inputs:
 % -data: kspace [nx ny nz nc] with zeros in empty lines
@@ -16,10 +16,9 @@ function ksp = grappa3(data,varargin)
 % Patterns tell the code which neighbors to use to construct
 % the center point. E.g. [1 0 1] means use 2 neighbors along
 % the z-direction to fill in the zero (resulting in [1 1 1]). 
-% Patterns are not unique - they are just vectors in the SAKE
-% nullspace - but some work better. 4 neighbors may be better
-% than 2 but 8 may be worse. Several patterns are configured
-% (see code around line 90).
+% Patterns are not unique but some work better. 4 neighbors
+% may be better than 2 but 8 may be worse. Several patterns
+% are configured (see code around line 103).
 %
 % (1) 2x1  y-only: x x x x  pattern = |1| or |1 1 1|
 %                  o o o o            |0|    |0 0 0|
@@ -46,10 +45,25 @@ function ksp = grappa3(data,varargin)
 %                  o x o x                        |1|
 %                  o o o o
 %
-% (6) 3x2 regular: x 0 x 0  pattern = |1 0 1|, |1| and |1|
-%                  0 0 0 0                     |0|     |0|
-%                  0 0 0 0                     |0|     |1|
-%                  x 0 x 0                     |1|
+% (6) 3x1  y-only: x x x x  pattern = |1| and |1|
+%                  o o o o            |0|     |0|
+%                  o o o o            |0|     |1|
+%                  x x x x            |1|
+%
+% (7) 3x  shifted: x o o x  pattern = |0 0 1| and |0 1 0| 
+%                  o x o o            |1 0 0|     |1 0 1|
+%                  o o x o            |0 1 0|     |0 1 0|
+%                  x o o x
+%
+% (8) 3x2 regular: x o x o  pattern = |1 0 1|, |1| and |1|
+%                  o o o o                     |0|     |0|
+%                  o o o o                     |0|     |1|
+%                  x o x o                     |1|
+%
+% (9) 3x3 regular: x o o x  pattern = |1 0 0 1|, |1 0 1|, |1| and |1|
+%                  o o o o                                |0|     |0|
+%                  o o o o                                |0|     |1|
+%                  x o o x                                |1|
 %
 %% example dataset
 
@@ -59,7 +73,7 @@ if nargin==0
     mask = false(size(data,1),size(data,2),size(data,3));
     mask(:,1:2:end,1:2:end) = 1; % undersample 2x2
     mask(:,3:4:end,:) = circshift(mask(:,3:4:end,:),[0 0 1]);
-    varargin{1} = 'pattern'; varargin{2} = 5; % specify pattern 5
+    varargin{1} = 'pattern'; varargin{2} = 5; % pattern 5
     %mask(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9)) = 1; % self calibration
     varargin{3} = 'cal'; varargin{4} = data(:,size(data,2)/2+(-9:9),size(data,3)/2+(-9:9),:); % separate calibration
     data = bsxfun(@times,data,mask); clearvars -except data varargin
@@ -96,21 +110,32 @@ elseif ~isscalar(opts.pattern)
 else
     switch opts.pattern
         case 1 % 2x1; 
-            pattern{1} = [1 1 1;0 0 0;1 1 1]; 
+            pattern{1} = [1 1 1;0 0 0;1 1 1];
         case 2 % 1x2
-            pattern{1} = [1 0 1;1 0 1;1 0 1]; 
+            pattern{1} = [1 0 1;1 0 1;1 0 1];
         case 3 % 2x shifted
-            pattern{1} = [0 1 0;1 0 1;0 1 0]; 
+            pattern{1} = [0 1 0;1 0 1;0 1 0];
         case 4 % 2x2 regular
-            pattern{1} = [1;0;1];
-            pattern{2} = [1 0 1];         
+            pattern{1} = [1 0 1;0 0 0;1 0 1]; 
+            pattern{2} = [0 1 0;1 0 1;0 1 0];      
         case 5 % 2x2 shifted
+            pattern{1} = [0 1 0;0 0 0;1 0 1;0 0 0;0 1 0]; 
+            pattern{2} = [1 1 1;0 0 0;1 1 1];
+        case 6 % 3x1 regular
+            pattern{1} = [1 1 1;0 0 0;0 0 0;1 1 1];
+            pattern{2} = [1 1 1;0 0 0;1 1 1];
+        case 7 % 3x shifted
+            pattern{1} = [0 0 1;1 0 0;0 1 0];
+            pattern{2} = [0 1 0;1 0 1;0 1 0]; 
+        case 8 % 3x2 regular
             pattern{1} = [1 0 1];
-            pattern{2} = [1;0;1]; 
-        case 6 % 3x2 regular
-            pattern{1} = [1 0 1];           
             pattern{2} = [1;0;0;1];
-            pattern{3} = [1;0;1];        
+            pattern{3} = [1;0;1];
+        case 9 % 3x3 regular
+            pattern{1} = [1 0 0 1];
+            pattern{2} = [1 0 1];
+            pattern{3} = [1;0;0;1];
+            pattern{4} = [1;0;1];  
         otherwise
             error('Pattern not recognized.');
     end
@@ -124,8 +149,8 @@ for j = 1:numel(pattern)
     pattern{j} = logical(pattern{j});
 
     % find center point of the convolution
-    c{j} = floor(1+size(pattern{j})/2); % ok for odd/even size
-    if pattern{j}(c{j}(1),c{j}(2))
+    center{j} = floor(1+size(pattern{j})/2); % ok for odd/even size
+    if pattern{j}(center{j}(1),center{j}(2))
         error('Target of pattern %i is not zero: [%s]',j,num2str(pattern{j}));
     end
 end
@@ -241,15 +266,13 @@ if nv<1
     error('Not enough ACS points in kx (%i).',nv);
 end
 
-% ACS lines for each sampling pattern
+% acs for each pattern (don't assume cal is symmetric => convn)
 for j = 1:numel(pattern)
     
-    % center point expressed as an index
-    ind = sub2ind(size(pattern{j}),c{j}(1),c{j}(2));
-    
-   % find patterns that satisfy acs sampling
-    a = pattern{j}; a(ind) = 1;
-    acs{j} = find(convn(yz,a,'same')==nnz(a)); % can't be sure ACS is symmetric, so can't use cconvn
+    % matching lines in cal
+    a = pattern{j};
+    a(center{j}) = 1;
+    acs{j} = find(convn(yz,a,'same')==nnz(a));
     na(j) = numel(acs{j});
     
     fprintf('No. ACS lines for pattern %i = %i ',j,na(j));
@@ -262,7 +285,7 @@ for j = 1:numel(pattern)
         error('Not enough ACS lines (%i).',na(j));
     end
 
-    % exclude ACS lines from being reconstructed
+    % exclude acs lines from being reconstructed
     if isempty(opts.cal); s{j}(acs{j}) = 0; end
     
 end
@@ -285,8 +308,8 @@ for j = 1:numel(pattern)
     [dy dz] = ind2sub(size(pattern{j}),find(pattern{j}));
 
     % center the offsets
-    dy = dy-c{j}(1);
-    dz = dz-c{j}(2);
+    dy = dy-center{j}(1);
+    dz = dz-center{j}(2);
     
     % convolution matrix
     for k = 1:nnz(pattern{j})
@@ -316,18 +339,14 @@ for j = 1:numel(pattern)
     invS(~isfinite(invS.^2)) = 0;
     X = V*(invS.^2.*(V'*(A'*B)));
     
-    % resize for convn and pad with zeros: extra work but easier
-    X = reshape(X,numel(opts.idx),[],nc,nc);
-    
-    Y{j} = zeros(numel(opts.idx),numel(pattern{j}),nc,nc,'like',X);
+    % convert X from indices to convolution kernels
+    Y = zeros(numel(opts.idx),numel(pattern{j}),nc,nc,'like',X);
     for k = 1:nc
-        for m = 1:nc
-            Y{j}(:,find(pattern{j}),k,m) = X(:,:,k,m);
-        end
+        Y(:,find(pattern{j}),:,k) = reshape(X(:,k),numel(opts.idx),[],nc);
     end
-    Y{j} = reshape(Y{j},[numel(opts.idx) size(pattern{j}) nc nc]);
-
-    clear A B V X invS % reduce memory for next loop
+    kernel{j} = reshape(Y,[numel(opts.idx) size(pattern{j}) nc nc]);
+    
+    clear A B V invS X Y % reduce memory for next loop
 end
 fprintf('SVD tolerance = %.1e (%.1e%%)\n',tol,100*tol/S(1));
 fprintf('GRAPPA calibration: '); toc(t);
@@ -344,7 +363,7 @@ for j = 1:numel(pattern)
         ksp_coil_m = ksp(:,:,:,m);
         
         for k = 1:nc
-            tmp = cconvn(data(:,:,:,k),Y{j}(:,:,:,k,m));
+            tmp = cconvn(data(:,:,:,k),kernel{j}(:,:,:,k,m));
             ksp_coil_m(:,s{j}) = ksp_coil_m(:,s{j})+tmp(:,s{j});
         end
 
