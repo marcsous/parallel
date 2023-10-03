@@ -1,5 +1,5 @@
 function [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,Q)
-% [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,shrink)
+% [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,Q)
 %
 % Solves the following problem via ADMM:
 %
@@ -8,7 +8,7 @@ function [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,Q)
 % -A is a symmetric positive definite matrix (handle)
 % -sparsity is the fraction of zeros (0.1=10% zeros)
 % -tol/maxit are tolerance and max. no. iterations
-% -Q is a wavelet transform Q*x and Q'*x (see DWT)
+% -Q is a wavelet transform Q*x and Q'*x (see HWT.m)
 %
 % -lambda that yields the required sparsity (scalar)
 % -resvec is the residual at each iteration (vector)

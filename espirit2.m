@@ -160,10 +160,10 @@ AA = @(x)myfunc(x,C,mask,opts.beta);
 Ab = bsxfun(@times,conj(C),fft2(data));
 Ab = reshape(sum(Ab,3),[],1);
 try
-    Q = DWT([nx ny],'db1'); % DWT wavelet transform
+    Q = HWT([nx ny]); % Haar wavelet transform
 catch
     Q = 1;
-    warning('DWT wavelet transform failed => using sparsity in image.');
+    warning('HWT wavelet transform failed => using image sparsity.');
 end
 
 % solve by pcg/minres

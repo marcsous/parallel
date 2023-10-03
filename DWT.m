@@ -1,5 +1,5 @@
 classdef DWT
-    % obj = DWT(sizeINI,wname) ['db1','db2','db3']
+    % Q = DWT(sizeINI,wname) ['db1','db2','db3']
     %
     % wavelet transform without the agonizing pain.
     % basically takes care of the junk behind the
