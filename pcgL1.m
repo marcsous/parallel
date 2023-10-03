@@ -1,139 +1,122 @@
-function x = pcgL1(A, b, lambda, maxit, varargin)
-% x = pcgL1(A, b, lambda, maxit, varargin)
+function [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,Q)
+% [x lambda resvec] = pcgL1(A,b,sparsity,tol,maxit,shrink)
 %
 % Solves the following problem via ADMM:
 %
-%   minimize (1/2)*||Ax-b||_2^2 + lambda*||x||_1,
+%   minimize (1/2)||Ax-b||_2^2 + lambda*||Qx||_1
 %
-% where A is symmetric positive definite (same as pcg).
-% Best used with anonymous functions, A = @(x)myfunc(x)
-% where myfunc(x) returns (A*x).
+% -A is a symmetric positive definite matrix (handle)
+% -sparsity is the fraction of zeros (0.1=10% zeros)
+% -tol/maxit are tolerance and max. no. iterations
+% -Q is a wavelet transform Q*x and Q'*x (see DWT)
 %
-% rho is the augmented Lagrangian parameter.
+% -lambda that yields the required sparsity (scalar)
+% -resvec is the residual at each iteration (vector)
 %
-% alpha is the over-relaxation parameter (typical values for alpha are
-% between 1.0 and 1.8).
+% Derived from lasso_lsqr.m:
+% https://web.stanford.edu/~boyd/papers/admm/lasso/lasso_lsqr.html
 %
-% Derived from lasso_lsqr.m at
-% http://www.stanford.edu/~boyd/papers/distr_opt_stat_learning_admm.html
-%
-%% default options
-
-opts.tol = 1e-6;
-opts.rho = 1;
-opts.alpha = 1;
-
-% varargin handling (must be option/value pairs)
-for k = 1:2:numel(varargin)
-    if k==numel(varargin) || ~ischar(varargin{k})
-        error('''varargin'' must be option/value pairs.');
-    end
-    if ~isfield(opts,varargin{k})
-        warning('''%s'' is not a valid option.',varargin{k});
-    end
-    opts.(varargin{k}) = varargin{k+1};
-end
-
 %% check arguments
-
-if nargin<2
-    error('Not enough input arguments: b missing');
+if nargin<3 || nargin>6
+    error('Wrong number of input arguments');
 end
-if nargin<3 || isempty(lambda)
-    error('Not enough input arguments: lambda missing');
+if nargin<4 || isempty(tol)
+    tol = 1e-6;
 end
-if nargin<4 || isempty(maxit)
-    maxit = 20;
+if nargin<5 || isempty(maxit)
+    maxit = 100;
 end
-if ~iscolumn(b)
-    error('b argument must be a column vector');
-else
-    n = numel(b);
+if nargin<6 || isempty(Q)
+    Q = 1;
 end
-
-% not intended for matrix inputs but they are supported
 if isnumeric(A)
     A = @(arg) A * arg;
 end
+if ~iscolumn(b)
+    error('b must be a column vector');
+end
+if ~isscalar(sparsity) || sparsity<0 || sparsity>1
+    error('sparsity must be a scalar between 0 and 1.');
+end
 
-% check A is square [n x n]
+% check A is [n x n]
+n = numel(b);
 try
-    tmp = A(b);
-catch ME
-    error('A(x) failed when passed a vector of length %i: %s',n,ME.message);
+    Ab = A(b);
+catch
+    error('A(x) failed when passed a vector of length %i',n);
 end   
-if ~isequal(size(tmp),[n 1])
+if ~iscolumn(Ab) || numel(Ab)~=n
     error('A(x) did not return a vector of length %i',n);
 end
+ncalls = 1; % keep count of no. of matrix ncalls
 
-% check positive definiteness (50% chance of catching error)
-tmp = b'*tmp; % x'Ax > 0
-if abs(imag(tmp)) > n*eps(tmp) || real(tmp) < -n*eps(tmp)
-    warning('Matrix operator A may not be positive definite.');
+% check positive definiteness (50% chance of catching it)
+bAb = b'*Ab;
+if abs(imag(bAb)) > eps(bAb) || real(bAb) < -eps(bAb)
+    error('Matrix operator A is not positive definite.');
 end
-clear tmp;
 
-%% ADMM solver
+%% solve
 
-x = zeros(n,1,'like',b);
-z = zeros(n,1,'like',b);
-u = zeros(n,1,'like',b);
+alpha = (b'*b) / bAb;
+x = alpha * b;
 
-normb = norm(b);
+z = zeros(size(b),'like',b);
+u = zeros(size(b),'like',b);
 
-for iter = 1:maxit
-
-    % x-update with pcg - doesn't need to be very accurate 
-    Ak = @(x)A(x) + opts.rho*x;
-    bk = b + opts.rho*(z-u);
-    [x flag relres iters resvec] = pcg(Ak,bk,[],[],[],[],x);
-
-    % do we care about these? not really
-    %if flag~=0
-    %    warning('PCG problem (iter=%i flag=%i)',iter,flag);
-    %end
+for iter = 1:maxit 
+ 
+    % x-update
+    Ak = @(x)A(x) + x * (iter>1);
+    bk = b + (z - u);
+    [x,flag,~,~,tmp] = minres(Ak,bk,[],[],[],[],x);
     
-    % z-update with relaxation
-    zold = z;
-    x_hat = opts.alpha*x + (1 - opts.alpha)*zold;
-    z = shrinkage(x_hat + u, lambda/opts.rho);
-
-    % catch bad cases and recommend a ballpark lambda
-    if iter==1
-        target = median(abs(x_hat+u))*opts.rho; % 50% sparsity
-        if all(z(:)==0)
-            error('Too sparse (all zero), try reducing lambda to %.1e.',target);
-        end
-        if all(z(:)~=0)
-            error('Not sparse (all nonzero), try increasing lambda to %.1e.',target);
-        end
+    ncalls = ncalls + numel(tmp);
+    
+    if flag && (iter>1)
+        warning('minres returned error flag %i',flag);
     end
     
-    u = u + (x_hat - z);
-
+    % z-update
+    z = Q * (x + u);
+    
+    [z lambda] = shrinkage(z, sparsity);
+    
+    z = Q' * z;
+    
+    u = u + (x - z);
+    
     % check convergence
-    if norm(x-z) <  opts.tol*normb
+    resvec(iter) = norm(x-z) / norm(x);
+
+    if resvec(iter) < tol
         break;
     end
-
+    
 end
-
-% report sparsity
-fprintf('%s: sparsity %.1f%% (lambda=%.1e)\n',mfilename,100*(numel(x)-nnz(z))/numel(z),lambda);
-
-% check convergence
-if norm(x-z) <  opts.tol*norm(b)
-    fprintf('%s: tolerance reached in %i iterations\n',mfilename,iter);
-else
-    fprintf('%s: tolerance not reached in %i iterations\n',mfilename,iter);  
-end
-
 x = z;
 
+% report convergence
+if iter < maxit
+    fprintf('%s converged at iteration %i (%i function calls) to a solution with relative residual %.1e.\n',mfilename,iter,ncalls,resvec(iter));
+else
+    fprintf('%s stopped at iteration %i (%i function calls) with relative residual %.1e without converging to the desired tolerance %.1e.\n',mfilename,iter,ncalls,resvec(iter),tol);  
+end
 
-%% Helper function
+%% shrink based on sparsity => return lambda
+function [z lambda] = shrinkage(z,sparsity)
+    
+absz = abs(z);
 
-function z = shrinkage(x, kappa)
+v = sort(absz,'ascend');
 
-z = sign(x) .* max( abs(x) - kappa, 0); % complex ok
+index = round(sparsity*numel(z));
 
+if index==0
+    lambda = cast(0,'like',v);
+else
+    lambda = v(index);
+end
+
+z = sign(z) .* max(absz-lambda, 0); % complex ok
