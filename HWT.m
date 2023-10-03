@@ -64,13 +64,13 @@ classdef HWT
                 if obj.trans==0
 
                     % forward transform
-                    for d = 1:numel(sx)
-                        if sx(d) > 1
+                    for d = 1:numel(obj.sizeINI)
+                        if obj.sizeINI(d) > 1
                             
-                            ix = repmat({':'},numel(sx),1);
+                            ix = repmat({':'},numel(obj.sizeINI),1);
                             
-                            odd  = ix; odd{d}  = 1:2:sx(d);
-                            even = ix; even{d} = 2:2:sx(d);
+                            odd  = ix; odd{d}  = 1:2:obj.sizeINI(d);
+                            even = ix; even{d} = 2:2:obj.sizeINI(d);
                             
                             yodd  = y(odd{:});
                             yeven = y(even{:});
@@ -83,21 +83,21 @@ classdef HWT
                 else
                     
                     % inverse transform
-                    for d = 1:numel(sx)
-                        if sx(d) > 1
+                    for d = 1:numel(obj.sizeINI)
+                        if obj.sizeINI(d) > 1
                             
-                            ix = repmat({':'},numel(sx),1);
+                            ix = repmat({':'},numel(obj.sizeINI),1);
                             
-                            lo = ix; lo{d} = 1:sx(d)/2;
-                            hi = ix; hi{d} = 1+sx(d)/2:sx(d);
+                            lo = ix; lo{d} = 1:obj.sizeINI(d)/2;
+                            hi = ix; hi{d} = 1+obj.sizeINI(d)/2:obj.sizeINI(d);
                             
                             ylo = y(lo{:});
                             yhi = y(hi{:});
                             
-                            ix = repmat({':'},numel(sx),1);
+                            ix = repmat({':'},numel(obj.sizeINI),1);
                             
-                            odd  = ix; odd{d}  = 1:2:sx(d);
-                            even = ix; even{d} = 2:2:sx(d);
+                            odd  = ix; odd{d}  = 1:2:obj.sizeINI(d);
+                            even = ix; even{d} = 2:2:obj.sizeINI(d);
                             
                             y(odd{:})  = (ylo+yhi) / sqrt(2);
                             y(even{:}) = (ylo-yhi) / sqrt(2);                       
