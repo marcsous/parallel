@@ -188,7 +188,11 @@ classdef DWT
                 % number of coils
                 nc = prod(sx) / prod(obj.sizeINI);
                 
-                % get first coil dimension
+                if mod(nc,1)
+                    error('Expansion not compatible with sizeINI=[%s].',num2str(obj.sizeINI,'%i '));
+                end  
+                
+                % get coil dimension
                 dim = 0;
                 for d = 1:numel(sx)
                     if sx(d)~=dimsize(obj,d)
@@ -197,11 +201,6 @@ classdef DWT
                     end
                 end
 
-                % only allow expansion in 1st or last dim (or none)
-                if mod(nc,1)
-                    error('Expansion not compatible with sizeINI=[%s].',num2str(obj.sizeINI,'%i '));
-                end                
-                
                 % expand array dimension, e.g. [2n] => [n 2]
                 if dim>1 || iscolumn(x)
                     sx = [obj.sizeINI nc];
