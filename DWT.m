@@ -36,6 +36,14 @@ classdef DWT
     % < Z = zeros(sX(1),2*sX(2)-1,sX(3));
     % > Z = zeros(sX(1),2*sX(2)-1,sX(3),'like',X);
     %
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/dwt.m
+    % < validateattributes(x,{'numeric'},{'vector','finite','real'},'dwt','X');
+    % > validateattributes(x,{'numeric'},{'vector','finite'},'dwt','X');
+    %
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/idwt.m
+    % < validateattributes(...,{'numeric'},{'vector','finite','real'}...
+    % > validateattributes(...,{'numeric'},{'vector','finite'}...
+    %
     % /usr/local/MATLAB/R2018b/toolbox/matlab/datatypes/cell2mat.m
     % < cisobj = isobject(c{1});
     % > if isa(c{1},'gpuArray'); cisobj = ~isnumeric(c{1}); else; cisobj = isobject(c{1}); end
@@ -44,9 +52,13 @@ classdef DWT
     % < zeros(...);
     % > zeros(...,'like',x);
     %
+    % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/dyadup.m
+    % < if r>1, y = y'; end
+    % > if r>1, y = y.'; end
+    %
     % /usr/local/MATLAB/R2018b/toolbox/wavelet/wavelet/wextend.m
-    % < validateattributes(x,{'numeric'}
-    % > validateattributes(x,{'numeric','gpuArray'}
+    % < validateattributes(x,{'numeric'}...
+    % > validateattributes(x,{'numeric','gpuArray'}...
 
     properties (SetAccess = private)
         sizeINI
