@@ -81,7 +81,7 @@ for iter = 1:maxit
     % z-update
     z = Q * (x + u);
     
-    [z lambda] = shrinkage(z, sparsity);
+    [z lambda(iter)] = shrinkage(z, sparsity);
     
     z = Q' * z;
     

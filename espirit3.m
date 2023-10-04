@@ -151,8 +151,8 @@ C = C(:,1:opts.ni,:,:,:);
 % reorder: nx ny nz nc ni
 C = permute(C,[3 4 5 1 2]);
 
-% remove weird common phase
-C = bsxfun(@times,C,exp(-i*angle(sum(C,4))));
+% normalize phase to coil 1
+C = bsxfun(@times,C,exp(-i*angle(C(:,:,:,1,:))));
 
 %% switch to GPU (move up if pagesvd available on GPU)
 

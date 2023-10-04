@@ -142,7 +142,7 @@ C = C(:,1:opts.ni,:,:);
 % reorder: nx ny nc ni
 C = permute(C,[3 4 1 2]);
 
-% normalize to first coil phase
+% normalize phase to coil 1
 C = bsxfun(@times,C,exp(-i*angle(C(:,:,1,:))));
 
 %% switch to GPU (move up if pagesvd available on GPU)
@@ -168,7 +168,7 @@ end
 
 % solve by pcg/minres
 if opts.sparsity
-    [im lambda] = pcgL1(AA,Ab,opts.sparsity,opts.tol,opts.maxit,Q);
+    [im lambda resvec] = pcgL1(AA,Ab,opts.sparsity,opts.tol,opts.maxit,Q);
     z = abs(Q * im); sparsity = nnz(z <= 2*eps(max(z))) / numel(z);
     fprintf('ESPIRIT sparsity %f (lambda=%.2e)\n',sparsity,lambda);
 else
