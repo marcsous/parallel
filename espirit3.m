@@ -169,10 +169,10 @@ AA = @(x)myfunc(C,x,mask,opts.beta);
 Ab = bsxfun(@times,conj(C),fft3(data));
 Ab = reshape(sum(Ab,4),[],1);
 try
-    Q = HWT([nx ny nz]); % Haar wavelet transform
+    Q = HWT([nx ny nz]); % set up Haar wavelet transform
 catch
     Q = 1;
-    warning('HWT wavelet transform failed => using sparsity in image.');
+    warning('HWT failed => using sparsity in image domain.');
 end
 
 % solve by pcg/minres
