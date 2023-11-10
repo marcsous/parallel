@@ -23,7 +23,11 @@
 #define lapack_complex_float  mxComplexSingle
 #define lapack_complex_double mxComplexDouble
 #include "lapacke.h"
-#include "cblas.h" // openblas_set_num_threads
+
+/* for openblas_set_num_threads */
+#if !MATLAB_MEX_FILE
+#include "cblas.h" 
+#endif
 
 /* only works with interleaved complex */
 #if !MX_HAS_INTERLEAVED_COMPLEX
