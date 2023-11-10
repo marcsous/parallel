@@ -11,7 +11,7 @@
  *
  * Compile:
  *          (MATLAB) mex pagesvd.cpp -lmwlapack -R2018a
- *          (Octave) mex pagesvd.cpp -lopenblas -llapacke -R2018a
+ *          (Octave) mex pagesvd.cpp -lopenblas -llapacke -R2018a [./configure --with-blas=lopenblas --with-lapack=lopenblas]
  */
 #include "mex.h"
 #include <omp.h>
@@ -23,6 +23,7 @@
 #define lapack_complex_float  mxComplexSingle
 #define lapack_complex_double mxComplexDouble
 #include "lapacke.h"
+#include "cblas.h" // openblas_set_num_threads
 
 /* only works with interleaved complex */
 #if !MX_HAS_INTERLEAVED_COMPLEX
@@ -106,6 +107,11 @@ if (std::stod(OCTAVE_VERSION)<=8.3 && mxIsComplex(a)) udims[2] = vdims[2] = 2*p;
     mexCallMATLAB(1, mex_plhs, 0, mex_prhs, "maxNumCompThreads");
     int nthreads = (int)mxGetScalar(mex_plhs[0]);
     if (nthreads==1) mexWarnMsgTxt("pagesvd threads equals 1. Try increasing maxNumCompThreads.");
+
+#if !MATLAB_MEX_FILE
+/* disable blas threading (conflicts with openmp) */
+openblas_set_num_threads(1);
+#endif
 
     /* catch errors in omp block (mexErrMsgTxt crashes). on error, info stores bad matrix index */
     volatile int info = 0;
