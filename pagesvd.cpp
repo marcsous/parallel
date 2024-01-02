@@ -11,9 +11,9 @@
  *
  * Compile:
  *          (MATLAB) mex pagesvd.cpp -lmwlapack -R2018a
- *          (Octave) mex pagesvd.cpp -lopenblas -llapacke -R2018a [./configure --with-blas=lopenblas --with-lapack=lopenblas]
+ *          (Octave) mex pagesvd.cpp -lopenblas -llapacke -R2018a [./configure --with-blas=lopenblas --with-lapack=lopenblas --enable-std-pmr-polymorphic-allocator]
  */
-#include "mex.h"
+#include <mex.h>
 #include <omp.h>
 #include <cmath>
 #include <string>
@@ -22,11 +22,11 @@
 /* lapacke.h allows a custom complex type */
 #define lapack_complex_float  mxComplexSingle
 #define lapack_complex_double mxComplexDouble
-#include "lapacke.h"
+#include <lapacke.h>
 
-/* for openblas_set_num_threads */
+/* Octave: for openblas_set_num_threads */
 #if !MATLAB_MEX_FILE
-#include "cblas.h" 
+#include <cblas.h> 
 #endif
 
 /* only works with interleaved complex */
@@ -55,7 +55,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     for (int i = 1; i < nrhs; i++)
     {   
         char *c = mxArrayToString(prhs[i]); // no need to mxFree
-        std::string str = c ? c : "";
+        std::string str = c ? c : ""; // convert void to empty string
         
         if (str.compare("econ")==0)
             jobz = (nlhs > 1) ? 'S' : 'N';
@@ -95,15 +95,15 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     if (jobz=='S') vdims[0] = mn;
     if (jobz=='N') vdims[0] = vdims[1] = 1;
 
+/* Octave: workaround for mxCreateNumericArray bug #64687 */
 #if !MATLAB_MEX_FILE
-/* workaround for octave mxCreateNumericArray bug #64687 */
-#include "version.h"
-if (std::stod(OCTAVE_VERSION)<=8.3 && mxIsComplex(a)) udims[2] = vdims[2] = 2*p;
+    #include <version.h>
+    if (std::stod(OCTAVE_VERSION)<=8.3 && mxIsComplex(a)) udims[2] = vdims[2] = 2*p;
 #endif
     
-    mxArray *s = mxCreateNumericArray(3, sdims, mxGetClassID(a), mxREAL);    
-    mxArray *u = mxCreateNumericArray(3, udims, mxGetClassID(a), mxIsComplex(a) ? mxCOMPLEX : mxREAL);    
-    mxArray *v = mxCreateNumericArray(3, vdims, mxGetClassID(a), mxIsComplex(a) ? mxCOMPLEX : mxREAL);
+    mxArray *s = mxCreateUninitNumericArray(3, sdims, mxGetClassID(a), mxREAL); 
+    mxArray *u = mxCreateUninitNumericArray(3, udims, mxGetClassID(a), mxIsComplex(a) ? mxCOMPLEX : mxREAL);    
+    mxArray *v = mxCreateUninitNumericArray(3, vdims, mxGetClassID(a), mxIsComplex(a) ? mxCOMPLEX : mxREAL);
     if (!s || !u || !v) mexErrMsgTxt("Insufficent memory (s, u, v, info).");
    
     /* get no. threads from matlab (maxNumCompThreads) */
@@ -112,9 +112,9 @@ if (std::stod(OCTAVE_VERSION)<=8.3 && mxIsComplex(a)) udims[2] = vdims[2] = 2*p;
     int nthreads = (int)mxGetScalar(mex_plhs[0]);
     if (nthreads==1) mexWarnMsgTxt("pagesvd threads equals 1. Try increasing maxNumCompThreads.");
 
+/* Octave: disable openblas threading (conflicts with omp). matlab (mkl) seems okay */
 #if !MATLAB_MEX_FILE
-/* disable blas threading (conflicts with openmp) */
-openblas_set_num_threads(1);
+    openblas_set_num_threads(1);
 #endif
 
     /* catch errors in omp block (mexErrMsgTxt crashes). on error, info stores bad matrix index */
@@ -125,26 +125,28 @@ openblas_set_num_threads(1);
 #pragma omp parallel num_threads(nthreads)
 if (m*n*p)
 { 
-    /* copy of i-th matrix of a (lapack overwrites) */
+    /* space for i-th matrix of a (lapack overwrites) */
     void *a_i = LAPACKE_malloc( m * n * mxGetElementSize(a) ); 
-    if (!a_i) info = -1; // cannot exit out of the omp block
     
-    /* svd and transpose v */   
-    #pragma omp for schedule(static,1)
+    /* svd and transpose v */
+#pragma omp for schedule(static,1)
     for (int i = 0; i < p; i++)
     {
+        /* on error skip - cannot exit out of omp block */
+        if (!a_i || !info) continue;
+        
         /* point to the i-th matrix (use char* for bytes) */
         void *s_i = (char*)mxGetData(s) + i * sdims[0] * sdims[1] * mxGetElementSize(s);
         void *u_i = (char*)mxGetData(u) + i * udims[0] * udims[1] * mxGetElementSize(u);
         void *v_i = (char*)mxGetData(v) + i * vdims[0] * vdims[1] * mxGetElementSize(v);
-
-        /* on error skip */
-        if (info != 0)
-            ;
+        
+        /* initialize s_i to 0 and create local copy of a_i (use char* for bytes) */
+        std::fill_n((char*)s_i, sdims[0] * sdims[1] * mxGetElementSize(s), (char)0);
+        std::copy_n((char*)mxGetData(a) + i * m * n * mxGetElementSize(a), m * n * mxGetElementSize(a), (char*)a_i);
+        
         /* real float */
-        else if(!mxIsComplex(a) && !mxIsDouble(a))
+        if(!mxIsComplex(a) && !mxIsDouble(a))
         {
-            std::copy_n((float*)mxGetData(a) + i * m * n, m * n, (float*)a_i);
             if (LAPACKE_sgesdd(LAPACK_COL_MAJOR, jobz, m, n, (float*)a_i, adims[0], (float*)s_i, (float*)u_i, udims[0], (float*)v_i, vdims[0])) info = i+1;
             if (trans==false) transpose((float*)v_i, vdims[0], vdims[1]);
             if (outputForm=='M') shiftrows((float*)s_i, sdims[0], sdims[1]);
@@ -152,31 +154,28 @@ if (m*n*p)
         /* real double */
         else if(!mxIsComplex(a) &&  mxIsDouble(a))
         {
-            std::copy_n((double*)mxGetData(a) + i * m * n, m * n, (double*)a_i);   
             if (LAPACKE_dgesdd(LAPACK_COL_MAJOR, jobz, m, n, (double*)a_i, adims[0], (double*)s_i, (double*)u_i, udims[0], (double*)v_i, vdims[0])) info = i+1;
             if (trans==false) transpose((double*)v_i, vdims[0], vdims[1]);
             if (outputForm=='M') shiftrows((double*)s_i, sdims[0], sdims[1]);
-        }   
+        }
         /* complex float */
         else if( mxIsComplex(a) && !mxIsDouble(a))
         {
-            std::copy_n((mxComplexSingle*)mxGetData(a) + i * m * n, m * n, (mxComplexSingle*)a_i);   
             if (LAPACKE_cgesdd(LAPACK_COL_MAJOR, jobz, m, n, (mxComplexSingle*)a_i, adims[0], (float*)s_i, (mxComplexSingle*)u_i, udims[0], (mxComplexSingle*)v_i, vdims[0])) info = i+1;
             if (trans==false) transpose((mxComplexSingle*)v_i, vdims[0], vdims[1]);
-            if (outputForm=='M') shiftrows((float*)s_i, sdims[0], sdims[1]);      
+            if (outputForm=='M') shiftrows((float*)s_i, sdims[0], sdims[1]);
         }
         /* complex double */
         else if( mxIsComplex(a) &&  mxIsDouble(a))
         {
-            std::copy_n((mxComplexDouble*)mxGetData(a) + i * m * n, m * n, (mxComplexDouble*)a_i);   
             if (LAPACKE_zgesdd(LAPACK_COL_MAJOR, jobz, m, n, (mxComplexDouble*)a_i, adims[0], (double*)s_i, (mxComplexDouble*)u_i, udims[0], (mxComplexDouble*)v_i, vdims[0])) info = i+1;
             if (trans==false) transpose((mxComplexDouble*)v_i, vdims[0], vdims[1]);
             if (outputForm=='M') shiftrows((double*)s_i, sdims[0], sdims[1]);
         }
-      
-        /* lapack doesn't catch Inf but returns NaN singular values */
-        if (mxIsDouble(a) ? std::isnan(*(double*)s_i) : std::isnan(*(float*)s_i)) info = i+1; 
         
+        /* lapack doesn't catch Inf but returns NaN singular values */
+        if (mxIsDouble(a) ? std::isnan(*(double*)s_i) : std::isnan(*(float*)s_i)) info = i+1;
+
     } /* end of pragma omp for loop */
 
     if (a_i) LAPACKE_free(a_i);
@@ -223,7 +222,7 @@ if (m*n*p)
         mxDestroyArray(v);
     }
 }
-      
+
 
 // In-place matrix shift
 template <typename T>
