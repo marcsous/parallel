@@ -17,6 +17,7 @@
 #include <omp.h>
 #include <cmath>
 #include <string>
+#include <cstring>
 #include <algorithm>
 
 /* lapacke.h allows a custom complex type */
@@ -133,17 +134,17 @@ if (m*n*p)
     for (int i = 0; i < p; i++)
     {
         /* on error skip - cannot exit out of omp block */
-        if (!a_i || !info) continue;
+        if (a_i==NULL || info!=0) continue;
         
         /* point to the i-th matrix (use char* for bytes) */
         void *s_i = (char*)mxGetData(s) + i * sdims[0] * sdims[1] * mxGetElementSize(s);
         void *u_i = (char*)mxGetData(u) + i * udims[0] * udims[1] * mxGetElementSize(u);
         void *v_i = (char*)mxGetData(v) + i * vdims[0] * vdims[1] * mxGetElementSize(v);
         
-        /* initialize s_i to 0 and create local copy of a_i (use char* for bytes) */
-        std::fill_n((char*)s_i, sdims[0] * sdims[1] * mxGetElementSize(s), (char)0);
-        std::copy_n((char*)mxGetData(a) + i * m * n * mxGetElementSize(a), m * n * mxGetElementSize(a), (char*)a_i);
-        
+        /* initialize s_i to 0 and populate a_i */
+        std::memset(s_i, (char)0, sdims[0] * sdims[1] * mxGetElementSize(s));        
+        std::memcpy(a_i, (char*)mxGetData(a) + i * m * n * mxGetElementSize(a), m * n * mxGetElementSize(a));        
+ 
         /* real float */
         if(!mxIsComplex(a) && !mxIsDouble(a))
         {
