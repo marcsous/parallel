@@ -38,11 +38,12 @@ end
 %% setup
 
 % default options
-opts.width = 3; % kernel width: [x y z] or scalar
+opts.width = 3; % kernel width: scalar or [x y z]
 opts.radial = 0; % use radial kernel [1 or 0]
 opts.loraks = 0; % phase constraint (loraks)
-opts.tol = 1e-7; % tolerance (fraction change in norm)
 opts.maxit = 1e3; % maximum no. iterations
+opts.tol = 1e-4; % convergence tolerance
+opts.p = 2; % singular filter shape (>=1) 
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.gpu = 1; % use GPU, if available (often faster without)
@@ -115,8 +116,8 @@ if isempty(opts.cal); opts.cal = []; end
 % dimensions of the data set
 opts.dims = [nx ny nz nc nk];
 
-% set up DWT transform: [nx ny nz] or [nx ny nz nc]?
-if opts.sparsity; Q = DWT([nx ny nz],'db2'); end
+% set up wavelet transform:
+if opts.sparsity; Q = DWT([nx ny nz]); end
 
 % display
 disp(rmfield(opts,{'kernel'}));
@@ -149,7 +150,7 @@ if ~isempty(opts.cal)
 
     cal = cast(opts.cal,'like',data);
     AA = make_data_matrix(cal,opts);
-    [V W] = svd(AA); % could truncate V based on W...
+    [V S] = svd(AA); % could truncate V based on S...
 
 end
 
@@ -175,41 +176,39 @@ for iter = 1:opts.maxit
     
     % row space and singular values
     if isempty(opts.cal)
-        [V W] = svd(AA);
-        W = sqrt(diag(W));
+        [V S] = svd(AA);
+        S = sqrt(diag(S));
     else
-        W = sqrt(svd(AA));
+        S = sqrt(svd(AA));
     end
     
     % minimum variance filter
-    f = max(0,1-noise_floor.^2./W.^2); 
+    f = max(0,1-noise_floor.^opts.p./S.^opts.p); 
     F = V * diag(f) * V';
     
     % hankel structure (average along anti-diagonals)  
     ksp = undo_data_matrix(F,ksp,opts);
     
-    % check convergence (fractional change in Frobenius norm)
-    norms(1,iter) = norm(W,1); % nuclear norm 
-    norms(2,iter) = norm(W,2); % Frobenius norm
-    if iter==1
-        tol(iter) = cast(opts.tol,'like',norms);
+    % schatten p-norm
+    snorm(iter) = norm(S,opts.p); 
+    if iter<10 || snorm(iter)<snorm(iter-1)
+        tol = NaN;
     else
-        tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
+        tol = (snorm(iter)-snorm(iter-1)) / snorm(iter);
     end
-    converged = sum(tol<opts.tol) > 10;
     
     % display progress every 5 seconds
     if iter==1
         t(1:2) = tic(); % global/display timers
-    elseif toc(t(2)) > 5 || converged
+    elseif toc(t(2)) > 5 || tol < opts.tol
         if t(1)==t(2)
             fprintf('Iterations per second: %.2f\n',(iter-1)/toc(t(2)));
         end
-        display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts); t(2) = tic();          
+        display(S,f,noise_floor,ksp,iter,tol,snorm,mask,opts); t(2) = tic();          
     end
 
     % finish when nothing left to do
-    if converged; break; end
+    if tol < opts.tol; break; end
  
 end
 
@@ -288,12 +287,12 @@ for j = 1:nk
 end
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,tol,norms,mask,opts)
+function display(S,f,noise_floor,ksp,iter,tol,snorm,mask,opts)
 
 % plot singular values
-subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i',nnz(f))); 
-hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
-line(xlim,gather([1 1]*noise_floor/W(1)),'linestyle',':','color','black');
+subplot(1,4,1); plot(S/S(1)); title(sprintf('rank %i',nnz(f))); 
+hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]); grid on;
+line(xlim,gather([1 1]*noise_floor/S(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % mask on iter=1 to show the blackness of kspace
@@ -319,8 +318,7 @@ imagesc(sum(abs(ifft2(tmp)),3)); xlabel('z'); ylabel('y');
 title(sprintf('iter %i',iter));
 
 % plot change in metrics
-subplot(1,4,4);
-ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:));
-legend('||A||_*','||A||_F'); axis(ax,'tight');
-xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
+subplot(1,4,4); plot(snorm); xlabel('iters'); xlim([0 iter+1]); grid on;
+title(sprintf('tol %.2e',tol)); legend('||A||_p','location','northwest');
+
 drawnow;

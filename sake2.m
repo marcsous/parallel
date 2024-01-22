@@ -29,9 +29,9 @@ if nargin==0
     data = fftshift(fft2(data));
     mask = false(256,256);
     R = 3; mask(:,1:R:end) = 1; % undersampling
-    %mask(:,125:133) = 1; % self calibration (or separate)
+    %mask(:,124:134) = 1; % self calibration (or separate)
     varargin{1} = 'width'; varargin{2} = R+2; % specify kernel width   
-    varargin{3} = 'cal'; varargin{4} = data(:,125:133,:); % separate calibation
+    varargin{3} = 'cal'; varargin{4} = data(:,124:134,:); % separate calibation
     %varargin{5} = 'loraks'; varargin{6} = 1; % employ conjugate symmetry 
     %data=1e-6*complex(randn(size(data)),randn(size(data)));
     data = bsxfun(@times,data,mask); clearvars -except data varargin
@@ -40,11 +40,12 @@ end
 %% setup
 
 % default options
-opts.width = 4; % kernel width
-opts.radial = 0; % use radial kernel
+opts.width = 5; % kernel width
+opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
-opts.tol = 0e-6; % tolerance (fraction change in norm)
 opts.maxit = 1e4; % maximum no. iterations
+opts.tol = 1e-5; % convergence tolerance
+opts.p = 2; % singular filter shape (>=1) 
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.sparsity = 0; % sparsity in wavelet domain (0.1=10% zeros)
@@ -108,8 +109,8 @@ end
 % dimensions of the dataset
 opts.dims = [nx ny nc nk];
 
-% set up DWT transform: [nx ny] or [nx ny nc]?
-if opts.sparsity; Q = DWT([nx ny],'db2'); end
+% set up wavelet transform
+if opts.sparsity; Q = HWT([nx ny]); end
 
 % display
 disp(rmfield(opts,{'kernel'}));
@@ -136,7 +137,7 @@ if ~isempty(opts.cal)
     end
 
     A = make_data_matrix(cast(opts.cal,'like',data),opts);
-    [V W] = svd(A'*A); W = sqrt(diag(W));
+    [V S] = svd(A'*A); S = sqrt(diag(S));
     
 end
 
@@ -156,15 +157,14 @@ for iter = 1:opts.maxit
     
     % row space and singular values
     if isempty(opts.cal)
-        [V W] = svd(A'*A);
-        W = sqrt(diag(W));
+        [V S] = svd(A'*A);
+        S = sqrt(diag(S));
     else
-        W = sqrt(svd(A'*A));    
+        S = sqrt(svd(A'*A));  
     end
     
-    % minimum variance filter
-    f = max(0,1-noise_floor.^2./W.^2);
-    f(:)=1;f(35:end)=0;
+    % singular value filter
+    f = max(0,1-noise_floor.^opts.p./S.^opts.p);
     A = A * (V * diag(f) * V');
     
     % undo hankel structure
@@ -184,30 +184,28 @@ for iter = 1:opts.maxit
         ksp = ifft2(ksp); % to kspace
     end
 
-    % check convergence (fractional change in Frobenius norm)
-    norms(1,iter) = norm(W,1); % nuclear norm
-    norms(2,iter) = norm(W,2); % Frobenius norm
-    if iter==1
-        tol(iter) = cast(opts.tol,'like',norms);
+    % schatten p-norm
+    snorm(iter) = norm(S,opts.p);
+    if iter<10 || snorm(iter)<snorm(iter-1)
+        tol = NaN;
     else
-        tol(iter) = abs(norms(2,iter)-norms(2,iter-1))/norms(2,iter);
+        tol = (snorm(iter)-snorm(iter-1)) / snorm(iter);
     end
-    converged = sum(tol<opts.tol) > 10;
 
     % display progress every 1 second
-    if iter==1 || toc(t(1)) > 1 || converged || iter==opts.maxit
+    if iter==1 || toc(t(1)) > 1 || tol<opts.tol || iter==opts.maxit
         if iter==1
-            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1:2) = tic();
+            display(S,f,noise_floor,ksp,iter,snorm,tol,opts); t(1:2) = tic();
         elseif t(1)==t(2)
             fprintf('Iterations per second: %.2f\n',(iter-1) / toc(t(1)));
-            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1) = tic();
+            display(S,f,noise_floor,ksp,iter,snorm,tol,opts); t(1) = tic();
         else
-            display(W,f,noise_floor,ksp,iter,tol,norms,opts); t(1) = tic();    
+            display(S,f,noise_floor,ksp,iter,snorm,tol,opts); t(1) = tic();
         end
     end
 
     % finish when nothing left to do
-    if converged; break; end
+    if tol<opts.tol; break; end
 
 end
 
@@ -249,12 +247,12 @@ for k = 1:nk
 end
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,tol,norms,opts)
+function display(S,f,noise_floor,ksp,iter,snorm,tol,opts)
 
 % plot singular values
-subplot(1,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
-hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]);
-line(xlim,gather([1 1]*noise_floor/W(1)),'linestyle',':','color','black');
+subplot(1,4,1); plot(S/S(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
+hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]); grid on;
+line(xlim,gather([1 1]*noise_floor/S(1)),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % prefer ims over imagesc
@@ -271,8 +269,7 @@ subplot(1,4,3); imagesc(sum(abs(ifft2(ksp)),3));
 xlabel('dim 2'); ylabel('dim 1'); title(sprintf('iter %i',iter));
 
 % plot change in metrics
-subplot(1,4,4);
-ax = plotyy(1:iter,norms(1,:),1:iter,norms(2,:));
-legend('||A||_*','||A||_F');axis(ax,'tight');
-xlabel('iters'); title(sprintf('tol %.2e',tol(end)));
+subplot(1,4,4); plot(snorm); xlabel('iters'); xlim([0 iter+1]); grid on;
+title(sprintf('tol %.2e',tol)); legend('||A||_p','location','northwest');
+
 drawnow;

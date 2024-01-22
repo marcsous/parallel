@@ -1,5 +1,5 @@
-function [ksp basic nrm opts] = dhe(fwd,rev,varargin)
-% [ksp basic nrm opts] = dhe(fwd,rev,varargin)
+function [ksp basic snorm opts] = dhe(fwd,rev,varargin)
+% [ksp basic snorm opts] = dhe(fwd,rev,varargin)
 %
 % Double Half Echo Reconstruction (2D only)
 %
@@ -11,7 +11,7 @@ function [ksp basic nrm opts] = dhe(fwd,rev,varargin)
 %
 % -ksp is the reconstructed kspace for fwd/rev
 % -basic is a basic non-low rank reconstruction
-% -nrm is the convergence history (nuc and fro)
+% -snorm is the convergence history (frobenius)
 % -opts returns the options (opts.freq)
 %
 % Note: don't remove readout oversampling before
@@ -36,7 +36,7 @@ end
 opts.width = [5 5]; % kernel width (in kx ky)
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate symmetry
-opts.tol = 1e-6; % relative tolerance
+opts.tol = 1e-5; % relative tolerance
 opts.gpu = 1; % use gpu if available
 opts.maxit = 1e3; % maximum no. iterations
 opts.std = []; % noise std dev, if available
@@ -266,45 +266,43 @@ for iter = 1:max(1,opts.maxit)
 
     % row space and singular values
     if size(A,1)<=size(A,2)
-        [~,W,V] = svd(A,'econ');
-        W = diag(W);
-        V = V(:,1:numel(W));
+        [~,S,V] = svd(A,'econ');
+        S = diag(S);
+        V = V(:,1:numel(S));
     else
-        [V W] = svd(A'*A);
-        W = sqrt(diag(W));
+        [V S] = svd(A'*A);
+        S = sqrt(diag(S));
     end
 
     % minimum variance filter
-    f = max(0,1-noise_floor^2./W.^2);
+    f = max(0,1-noise_floor^2./S.^2);
     A = A * (V * diag(f) * V');
 
     % undo hankel structure
     [ksp opts] = undo_data_matrix(A,opts);
 
-    % check convergence (fractional change in Frobenius norm)
-    nrm(1,iter) = norm(W,1); % nuclear norm
-    nrm(2,iter) = norm(W,2); % Frobenius norm
-    if iter==1
-        tol(iter) = cast(opts.tol,'like',nrm);
+    % check convergence
+    snorm(iter) = norm(S,2);
+    if iter<10 || snorm(iter)<snorm(iter-1)
+        tol = NaN;
     else
-        tol(iter) = abs(nrm(2,iter)-nrm(2,iter-1))/nrm(2,iter);
+        tol = (snorm(iter)-snorm(iter-1)) / snorm(iter);
     end
-    converged = sum(tol<opts.tol) > 10;
 
     % display progress every 1 second
-    if iter==1 || toc(t(1)) > 1 || converged || iter==opts.maxit
+    if iter==1 || toc(t(1)) > 1 || tol<opts.tol || iter==opts.maxit
         if iter==1
-            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1:2) = tic();
+            display(S,f,noise_floor,ksp,iter,snorm,tol,mask,opts); t(1:2) = tic();
         elseif t(1)==t(2)
             fprintf('Iterations per second: %.2f\n',(iter-1) / toc(t(1)));
-            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1) = tic();
+            display(S,f,noise_floor,ksp,iter,snorm,tol,mask,opts); t(1) = tic();
         else
-            display(W,f,noise_floor,ksp,iter,nrm,mask,opts); t(1) = tic();
+            display(S,f,noise_floor,ksp,iter,snorm,tol,mask,opts); t(1) = tic();
         end
     end
 
     % finish
-    if converged || opts.maxit<=1; break; end
+    if tol<opts.tol || opts.maxit<=1; break; end
 
 end
 
@@ -329,7 +327,7 @@ if opts.readout==2
 end
 
 % only return first/last nrm
-nrm = nrm(:,[1 end]);
+snorm = snorm(:,[1 end]);
 
 % avoid dumping to screen
 if nargout==0; clear; end
@@ -418,40 +416,40 @@ A = make_data_matrix(data,opts);
 % gradient
 if nargout<2
     if size(A,1)<=size(A,2)
-        W = svd(A,0);
+        S = svd(A,0);
     else
-        W = svd(A'*A);
-        W = sqrt(W);
+        S = svd(A'*A);
+        S = sqrt(S);
     end
-    dW = [];
+    dS = [];
 else
     if size(A,1)<=size(A,2)
-        [~,W,V] = svd(A,0);
-        W = diag(W);
-        V = V(:,1:numel(W));
+        [~,S,V] = svd(A,0);
+        S = diag(S);
+        V = V(:,1:numel(S));
     else
-        [V W] = svd(A'*A);
-        W = sqrt(diag(W));
+        [V S] = svd(A'*A);
+        S = sqrt(diag(S));
     end
     dA = A.*opts.P;
-    dW = real(diag(V'*(A'*dA)*V))./W;
+    dS = real(diag(V'*(A'*dA)*V))./S;
 end
 
 % plain doubles for fminunc
-nrm = gather(sum( W,'double'));
-grd = gather(sum(dW,'double'));
+nrm = gather(sum( S,'double'));
+grd = gather(sum(dS,'double'));
 
 %% show plots of various things
-function display(W,f,noise_floor,ksp,iter,nrm,mask,opts)
+function display(S,f,noise_floor,ksp,iter,snorm,tol,mask,opts)
 
 nx = opts.dims(1);
 ne = opts.dims(4);
 nh = opts.dims(5);
 
 % plot singular values
-subplot(2,4,1); plot(W/W(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
+subplot(2,4,1); plot(S/S(1)); title(sprintf('rank %i/%i',nnz(f),numel(f)));
 hold on; plot(f,'--'); hold off; xlim([0 numel(f)+1]); ylim([0 1]); grid on;
-line(xlim,min(1,gather([1 1]*noise_floor/W(1))),'linestyle',':','color','black');
+line(xlim,min(1,gather([1 1]*noise_floor/S(1))),'linestyle',':','color','black');
 legend({'singular vals.','sing. val. filter','noise floor'});
 
 % plot change in metrics
@@ -461,9 +459,8 @@ if iter==1 && isfield(opts,'nrm') && opts.dims(5)>1 % only if nh>1
     axis tight; ylabel('||A||_*','fontweight','bold'); xlabel('freq (deg/dwell)');
     line([1 1]*opts.freq,ylim,'linestyle','--','color','red'); grid on;
 else
-    ax = plotyy(1:iter,nrm(1,:),1:iter,nrm(2,:),'semilogy','semilogy');
-    legend('||A||_*','||A||_F','location','northeast'); xlabel('iters');
-    title(sprintf('tol %.2e',nrm(2,end))); axis(ax,'tight');
+    semilogy(snorm); grid on; xlim([1 iter]); xlabel('iters');
+    legend('||A||_F','location','northeast'); title(sprintf('tol %.2e',tol));
 end
 
 % mask on iter=1 to show the blackness of kspace
