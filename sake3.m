@@ -7,8 +7,8 @@ function ksp = sake3(data,varargin)
 % Singular value filtering is done based on opts.std
 % which is a key parameter that affects image quality.
 %
-% Conjugate symmetry requires center of kspace at the
-% center of the array (for flip). Calibration data too.
+% Conjugate symmetry requires the center of kspace to be
+% at the center of the array so that flip works correctly.
 %
 % Inputs:
 %  -data [nx ny nz nc]: 3D kspace data array from nc coils
@@ -39,11 +39,11 @@ end
 
 % default options
 opts.width = 3; % kernel width: scalar or [x y z]
-opts.radial = 0; % use radial kernel [1 or 0]
+opts.radial = 1; % use radial kernel [1 or 0]
 opts.loraks = 0; % phase constraint (loraks)
 opts.maxit = 1e3; % maximum no. iterations
 opts.tol = 1e-4; % convergence tolerance
-opts.p = 2; % singular filter shape (>=1) 
+opts.pnorm = 2; % singular filter shape (>=1) 
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.gpu = 1; % use GPU, if available (often faster without)
@@ -70,7 +70,7 @@ end
 if numel(opts.width)==1
     opts.width = [1 1 1] * opts.width;
 elseif numel(opts.width)~=3
-    error('width must have 1 or 3 elements');
+    error('width must have 1 or 3 elements.');
 end
 [nx ny nz nc] = size(data);
 if nz==1; opts.width(3) = 1; end % handle 2D case
@@ -90,7 +90,7 @@ opts.kernel.y = y(k);
 opts.kernel.z = z(k);
 opts.kernel.mask = k;
 
-% estimate center of kspace
+% estimate center of kspace (heuristic)
 [~,k] = max(reshape(data,[],nc));
 [x y z] = ind2sub([nx ny nz],k);
 opts.center(1) = gather(round(median(x)));
@@ -109,31 +109,31 @@ noise_floor = opts.std * sqrt(nnz(data)/nc);
 if opts.loraks
     nc = 2*nc;
     data = cat(4,data,conj(flip(flip(flip(data,1),2),3)));
-    opts.cal = cat(4,opts.cal,conj(flip(flip(flip(opts.cal,1),2),3)));
+    if ~isempty(opts.cal)
+        error('Conjugate symmetry not compatible with separate calibration.');
+    end
 end
-if isempty(opts.cal); opts.cal = []; end
 
 % dimensions of the data set
 opts.dims = [nx ny nz nc nk];
 
 % set up wavelet transform:
-if opts.sparsity; Q = DWT([nx ny nz]); end
+if opts.sparsity; Q = HWT([nx ny nz]); end
 
 % display
 disp(rmfield(opts,{'kernel'}));
 fprintf('Density = %f\n',nnz(data)/numel(data));
 
 if ~nnz(data) || ~isfinite(noise_floor)
-    error('data all zero or contains Inf/NaN');
+    error('data all zero or contains Inf/NaN.');
 end
 
 %% see if gpu is possible
 
 try
     if ~opts.gpu; error('GPU option set to off.'); end
-    gpu = gpuDevice;
     if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b.'); end
-    data = gpuArray(data);
+    gpu = gpuDevice; data = gpuArray(data);
     fprintf('GPU found: %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
 catch ME
     data = gather(data);
@@ -182,15 +182,15 @@ for iter = 1:opts.maxit
         S = sqrt(svd(AA));
     end
     
-    % minimum variance filter
-    f = max(0,1-noise_floor.^opts.p./S.^opts.p); 
+    % singular value filter
+    f = max(0,1-(noise_floor./S).^opts.pnorm); 
     F = V * diag(f) * V';
     
     % hankel structure (average along anti-diagonals)  
     ksp = undo_data_matrix(F,ksp,opts);
     
-    % schatten p-norm
-    snorm(iter) = norm(S,opts.p); 
+    % schatten p-norm of A
+    snorm(iter) = norm(S,opts.pnorm); 
     if iter<10 || snorm(iter)<snorm(iter-1)
         tol = NaN;
     else
@@ -235,17 +235,21 @@ for j = 1:nk
     row = circshift(data,[x y z]); % rows of A.'
  
     for k = j:nk
-        
-        x = opts.kernel.x(k);
-        y = opts.kernel.y(k);
-        z = opts.kernel.z(k);
-        col = circshift(data,[x y z]); % cols of A
 
-        % fill normal matrix (conjugate symmetric)
-        tmp = reshape(row,[],nc)' * reshape(col,[],nc);
-        AA(:,j,:,k) = tmp;
-        AA(:,k,:,j) = tmp';
-        
+        if j==k
+            AA(:,j,:,k) = reshape(row,[],nc)' * reshape(row,[],nc);
+        else
+            x = opts.kernel.x(k);
+            y = opts.kernel.y(k);
+            z = opts.kernel.z(k);
+            col = circshift(data,[x y z]); % cols of A
+
+            % fill normal matrix (conjugate symmetric)
+            tmp = reshape(row,[],nc)' * reshape(col,[],nc);
+            AA(:,j,:,k) = tmp;
+            AA(:,k,:,j) = tmp';
+        end
+
     end
 
 end
@@ -273,7 +277,7 @@ for j = 1:nk
     
     for k = 1:nk
 
-        tmp = reshape(col,[],nc) * squeeze(F(:,j,:,k));
+        tmp = reshape(col,[],nc) * reshape(F(:,j,:,k),nc,nc);
         tmp = reshape(tmp,nx,ny,nz,nc);
 
         % average along rows      

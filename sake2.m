@@ -8,7 +8,6 @@ function ksp = sake2(data,varargin)
 %
 % Conjugate symmetry requires the center of kspace to be
 % at the center of the array so that flip works correctly.
-% Ditto for separate calibration data.
 %
 % Inputs:
 %  -data [nx ny nc]: 2D kspace data array from nc coils
@@ -29,11 +28,8 @@ if nargin==0
     data = fftshift(fft2(data));
     mask = false(256,256);
     R = 3; mask(:,1:R:end) = 1; % undersampling
-    %mask(:,124:134) = 1; % self calibration (or separate)
-    varargin{1} = 'width'; varargin{2} = R+2; % specify kernel width   
-    varargin{3} = 'cal'; varargin{4} = data(:,124:134,:); % separate calibation
-    %varargin{5} = 'loraks'; varargin{6} = 1; % employ conjugate symmetry 
-    %data=1e-6*complex(randn(size(data)),randn(size(data)));
+    mask(:,124:134) = 1; % self calibration (or separate)
+    varargin{1} = 'loraks'; varargin{2} = 1; % employ conjugate symmetry 
     data = bsxfun(@times,data,mask); clearvars -except data varargin
 end
 
@@ -43,9 +39,9 @@ end
 opts.width = 5; % kernel width
 opts.radial = 1; % use radial kernel
 opts.loraks = 0; % conjugate coils (loraks)
-opts.maxit = 1e4; % maximum no. iterations
-opts.tol = 1e-5; % convergence tolerance
-opts.p = 2; % singular filter shape (>=1) 
+opts.maxit = 1e3; % maximum no. iterations
+opts.tol = 1e-6; % convergence tolerance
+opts.pnorm = 2; % singular filter shape (>=1) 
 opts.std = []; % noise std dev, if available
 opts.cal = []; % separate calibration data, if available
 opts.sparsity = 0; % sparsity in wavelet domain (0.1=10% zeros)
@@ -69,7 +65,7 @@ if ndims(data)<2 || ndims(data)>3 || ~isfloat(data) || isreal(data)
     error('''data'' must be a 3d complex float array.')
 end
 if numel(opts.width)~=1
-    error('width must be scalar');
+    error('width must be scalar.');
 end
 [nx ny nc] = size(data);
 
@@ -85,7 +81,7 @@ opts.kernel.x = x(k);
 opts.kernel.y = y(k);
 opts.kernel.mask = k;
 
-% estimate center of kspace
+% estimate center of kspace (heuristic)
 [~,k] = max(reshape(data,[],nc));
 [x y] = ind2sub([nx ny],k);
 opts.center(1) = gather(round(median(x)));
@@ -103,7 +99,9 @@ noise_floor = opts.std * sqrt(nnz(data)/nc);
 if opts.loraks
     nc = 2*nc;
     data = cat(3,data,conj(flip(flip(data,1),2)));
-    opts.cal = cat(3,opts.cal,conj(flip(flip(opts.cal,1),2)));
+    if ~isempty(opts.cal)
+        error('Conjugate symmetry not compatible with separate calibration.');
+    end
 end
 
 % dimensions of the dataset
@@ -119,9 +117,8 @@ fprintf('Density = %f\n',nnz(data)/numel(data));
 %% see if gpu is possible
 
 try
-    gpu = gpuDevice;
     if verLessThan('matlab','8.4'); error('GPU needs MATLAB R2014b.'); end
-    data = gpuArray(data);
+    gpu = gpuDevice; data = gpuArray(data);
     fprintf('GPU found: %s (%.1f Gb)\n',gpu.Name,gpu.AvailableMemory/1e9);
 catch ME
     data = gather(data);
@@ -137,7 +134,7 @@ if ~isempty(opts.cal)
     end
 
     A = make_data_matrix(cast(opts.cal,'like',data),opts);
-    [V S] = svd(A'*A); S = sqrt(diag(S));
+    [V S] = svd(A'*A); % could truncate V based on S...
     
 end
 
@@ -164,7 +161,7 @@ for iter = 1:opts.maxit
     end
     
     % singular value filter
-    f = max(0,1-noise_floor.^opts.p./S.^opts.p);
+    f = max(0,1-(noise_floor./S).^opts.pnorm);
     A = A * (V * diag(f) * V');
     
     % undo hankel structure
@@ -185,7 +182,7 @@ for iter = 1:opts.maxit
     end
 
     % schatten p-norm
-    snorm(iter) = norm(S,opts.p);
+    snorm(iter) = norm(S,opts.pnorm);
     if iter<10 || snorm(iter)<snorm(iter-1)
         tol = NaN;
     else
