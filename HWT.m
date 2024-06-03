@@ -9,7 +9,27 @@ classdef HWT
     % -accepts leading or trailing coil dimensions
     % -Q.thresh(x,sparsity) does soft thresholding
     %  to a given sparsity (e.g. 0.25 => 25% zeros)
-
+    %
+    % Example:
+    %{
+       x = (1:8) + 0.1*randn(1,8);
+       Q = HWT(size(x));
+       y = Q * x; % forward
+       z = Q'* y; % inverse
+       norm(x-z,Inf)
+         ans = 2.3801e-12
+       z = Q.thresh(x,0.25); % 25% zeros
+       norm(x-z,Inf)
+         ans = 0.2362
+       [x;z]
+         ans =
+           0.9468    1.9106    3.1145    4.0127    4.7686    6.0869    6.9622    8.1000
+           0.8835    1.9429    2.9707    3.8405    4.7527    5.8872    6.9622    7.8637
+       Q*[x;z]
+         ans =
+           4.7292    3.8104    6.3904   10.4568   -1.1663    0.1082    0.1412    3.9703
+           4.5880    3.6692    6.2492   10.3156   -1.0251         0         0    3.8291
+    %}
     properties (SetAccess = private)
         sizeINI
         trans = false
@@ -68,7 +88,6 @@ classdef HWT
                         if obj.sizeINI(d) > 1
                             
                             ix = repmat({':'},numel(obj.sizeINI),1);
-                            
                             odd  = ix; odd{d}  = 1:2:obj.sizeINI(d);
                             even = ix; even{d} = 2:2:obj.sizeINI(d);
                             
@@ -95,7 +114,6 @@ classdef HWT
                             yhi = y(hi{:});
                             
                             ix = repmat({':'},numel(obj.sizeINI),1);
-                            
                             odd  = ix; odd{d}  = 1:2:obj.sizeINI(d);
                             even = ix; even{d} = 2:2:obj.sizeINI(d);
                             
@@ -146,34 +164,34 @@ classdef HWT
         %% threshold wavelet coefficients
         function [y lambda] = thresh(obj,x,sparsity)
             
-            if nargin<3 || ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<0 || sparsity>1
+            if nargin<3 
+                error('Not enough input arguments.');
+            end
+            if ~isscalar(sparsity) || ~isreal(sparsity) || sparsity<0 || sparsity>1
                 error('sparsity must be a scalar between 0 and 1.')
             end
             
             % to wavelet domain
             y = obj * x;
 
-            % soft threshold all coils together
-            y = reshape(y,[],1);
+            % soft threshold coils separately
+            y = reshape(y,prod(obj.sizeINI),[]);
 
             absy = abs(y);
             signy = sign(y);
             
             v = sort(absy,'ascend');
-            index = round(numel(v) * sparsity);
+            index = round(prod(obj.sizeINI) * sparsity);
             
             if index==0
                 lambda = cast(0,'like',v);
             else
-                lambda = v(index);
+                lambda = v(index,:);
                 y = signy .* max(absy-lambda,0);
             end
 
             % to image domain
-            y = obj' * y;
-            
-            % original shape
-            y = reshape(y,size(x));
+            y = obj' * reshape(y,size(x));
 
         end
 
