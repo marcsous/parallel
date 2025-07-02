@@ -200,10 +200,11 @@ if opts.gpu
 end
 
 %% corrections - need both fwd & rev
-if nh>1 && ~isequal(opts.freq,0)
 
-    % frequency: unit = deg/dwell
-    opts.kx = (-nx/2:nx/2-1)' * pi / 180;
+% frequency: unit = deg/dwell
+opts.kx = (-nx/2:nx/2-1)' * pi / 180;
+
+if nh>1 && isempty(opts.freq)
 
     % quick scan to find global minimum
     opts.range = linspace(-3,3,11);
@@ -226,27 +227,28 @@ if nh>1 && ~isequal(opts.freq,0)
         opts.freq = fminunc(@(f)myfun(f,data/nrm,opts),best,fopts);
     end
 
-    % off resonance correction
-    roll = exp(i*opts.kx*opts.freq);
-    data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
-    data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
-
-    % phase correction
-    r = dot(data(:,:,:,:,1),data(:,:,:,:,2));
-    d = dot(data(:,:,:,:,1),data(:,:,:,:,1));
-    r = reshape(r,[],1); d = reshape(real(d),[],1);
-    phi = angle((r'*d) / (d'*d)) / 2;
-
-    data(:,:,:,:,1) = data(:,:,:,:,1)./exp(i*phi);
-    data(:,:,:,:,2) = data(:,:,:,:,2).*exp(i*phi);
-
-    % units: phi=radians freq=deg/dwell
-    fprintf('Corrections: ϕ=%.2frad Δf=%.2fdeg/dwell\n',phi,opts.freq);
-
-    % clear memory on GPU
-    opts.P = []; clear tmp roll r d nrm
-
 end
+
+% off resonance correction
+roll = exp(i*opts.kx*opts.freq);
+data(:,:,:,:,1) = data(:,:,:,:,1)./roll;
+data(:,:,:,:,2) = data(:,:,:,:,2).*roll;
+
+% phase correction
+r = dot(data(:,:,:,:,1),data(:,:,:,:,2));
+d = dot(data(:,:,:,:,1),data(:,:,:,:,1));
+r = reshape(r,[],1); d = reshape(real(d),[],1);
+phi = angle((r'*d) / (d'*d)) / 2;
+
+data(:,:,:,:,1) = data(:,:,:,:,1)./exp(i*phi);
+data(:,:,:,:,2) = data(:,:,:,:,2).*exp(i*phi);
+
+% units: phi=radians freq=deg/dwell
+fprintf('Corrections: ϕ=%.2frad Δf=%.2fdeg/dwell\n',phi,opts.freq);
+
+% clear memory on GPU
+opts.P = []; clear tmp roll r d nrm
+
 
 %% basic algorithm (average in place)
 
@@ -418,8 +420,9 @@ if nargout<2
     if size(A,1)<=size(A,2)
         S = svd(A,0);
     else
-        S = svd(A'*A);
-        S = sqrt(S);
+        %S = svd(A'*A);
+        %S = sqrt(S);
+        S = svd(A,0);
     end
     dS = [];
 else
@@ -428,8 +431,10 @@ else
         S = diag(S);
         V = V(:,1:numel(S));
     else
-        [V S] = svd(A'*A);
-        S = sqrt(diag(S));
+        %[V S] = svd(A'*A);
+        %S = sqrt(diag(S));
+        [~,S,V] = svd(A,0);
+        S = diag(S);
     end
     dA = A.*opts.P;
     dS = real(diag(V'*(A'*dA)*V))./S;
@@ -454,13 +459,13 @@ legend({'singular vals.','sing. val. filter','noise floor'});
 
 % plot change in metrics
 subplot(2,4,5);
-if iter==1 && isfield(opts,'nrm') && opts.dims(5)>1 % only if nh>1
+if iter==1 && isfield(opts,'nrm') && nh>1
     plot(opts.range,opts.nrm,'-o'); title('off-resonance'); yticklabels([]);
     axis tight; ylabel('||A||_*','fontweight','bold'); xlabel('freq (deg/dwell)');
     line([1 1]*opts.freq,ylim,'linestyle','--','color','red'); grid on;
 else
-    semilogy(snorm); grid on; xlim([1 iter]); xlabel('iters');
-    legend('||A||_F','location','northeast'); title(sprintf('tol %.2e',tol));
+    semilogy(0:numel(snorm)-1,snorm); grid on; axis tight; xlabel('iters');
+    legend('||A||_F','location','northwest'); title(sprintf('tol %.2e',tol));
 end
 
 % mask on iter=1 to show the blackness of kspace
