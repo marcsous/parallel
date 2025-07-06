@@ -1,96 +1,104 @@
-function [im coils noise] = matched_filter(data,np)
+function [out coils noise] = matched_filter(in,dim,np)
 % Matched filter coil combination (Walsh MRM 2000;43:682)
 %
-% Inputs:
-%  data = complex images [nx ny nz nc (ne)] 
-%  np = no. pixels in the neighborhood (100)
+% Inputs
+%  in: array of complex images [2D,3D,4D] 
+%  dim: the coil dimension (default=last)
+%  np: no. pixels in the neighborhood (default=200)
 %
 % Output:
-%  im = the combined image [nx ny nz (ne)] 
-%  coils = the optimal coil filters 
+%  out = combined image [same as input with nc=1] 
+%  coils = the optimal filters used
 %  noise = noise std estimate (maybe?)
+%
+% Neighborhood does not extend over slices (thickness >> pixel).
+% Extra dimensions after the coil dim (e.g. TE,TI) are included.
+%
+%% size - 1D, 2D, 3D, extra dimensions
+sz = size(in);
 
-%% parse inputs
-[nx ny nz nc ne] = size(data);
-
-% try to accomodate 2D, 3D and a time dimension (echo)
-if isempty(data)
-    error('data cannot be empty');
-elseif ndims(data)==3 
-    nc = nz; nz = 1;
-elseif ndims(data)<4 || ndims(data)>5
-    error('data must be [nx ny nz nc ne]');
+if isempty(in) || numel(sz)<3
+    error('input must be an array of images');
+end
+if ~exist('dim','var') || isempty(dim)
+    dim = numel(sz); % assume last dimension is coils
+elseif ~isscalar(dim) || dim<1 || dim>numel(sz) || mod(dim,1)
+    error('dim is out of range');
 end
 
-% coil dimension (must be 4)
-dim = 4;
-data = reshape(data,[nx ny nz nc ne]);
+% coil dimension
+nc = sz(dim);
 
-% np=200 is 90% optimal but most benefit comes earlier
-if ~exist('np','var')
-    np = 100;
+% in-plane dimensions
+nx = sz(1);
+ny = sz(2);
+
+% slice dimension
+if dim==3
+    nz = 1;
+else
+    nz = sz(3);
+end
+
+% extra dimensions
+ne = prod(sz(dim:end)) / nc;
+
+%% neighborhood of np nearest pixels (symmetric about center)
+
+if ~exist('np','var') || isempty(np)
+    np = 200; % np = 200 is 90% optimal
 else
     np = max(nc,np); % lower limit
 end 
 
-% warn about silliness
-if np*ne > 1000
-    warning('effective neighborhood size (ne*np=%i) is excessively large',np*ne);
+% catch silliness (prevent crash)
+if np > 1000
+    error('neighborhood size (np=%i) is too large',np);
 end
 
-%% neighborhood of np nearest pixels
-
-% polygon of sides L
-L(3) = min(nz,np^(1/3));
-L(2) = (np/L(3))^(1/2);
-L(1) = (np/L(3))^(1/2);
-
-[x y z] = ndgrid(-ceil(L(1)/2):ceil(L(1)/2), ...
-                 -ceil(L(2)/2):ceil(L(2)/2), ...
-                  -fix(L(3)/2):fix(L(3)/2));
+% get indices of a large circle (radius L)
+L = sqrt(np/ne);
+[x y] = ndgrid(-ceil(L/2):ceil(L/2));
 
 % sort by radius
-r = sqrt(x.^2 + y.^2 + z.^2);
+r = hypot(x,y);
 [r k] = sort(reshape(r,[],1));
 
-% round to nearest symmetric kernel
+% pick nearest symmetric kernel to np points
 ok = find(diff(r));
-[~,j] = min(abs(np-ok));
+[~,j] = min(abs(ok-np/ne));
 np = ok(j); k = k(1:np);
+x = x(k); y = y(k);
 
-% keep nearest np points
-x = x(k); y = y(k); z = z(k);
+fprintf('%s: [%i %i %i] nc=%i ne=%i np=%i r=%.3f\n',mfilename,nx,ny,nz,nc,ne,np*ne,r(np));
 
-disp([mfilename ': [' num2str(size(data)) '] np=' num2str(np) ' r=' num2str(r(np),'%f')]);
+%% permute for fast page operations
+in = reshape(in,[nx ny nz nc ne]);
+order = [4 5 1 2 3]; % [nc ne nx ny nz]
+in = permute(in,order); 
 
-%% convolution matrix
-coils = zeros(nx,ny,nz,nc,ne,np,'like',data);
+%% construct matched filter
+coils = zeros(nc,ne,np,nx,ny,nz,'like',in);
 
 for p = 1:np
-    shift = [x(p) y(p) z(p)];
-    coils(:,:,:,:,:,p) = circshift(data,shift);
+    shift = [0 0 x(p) y(p)];
+    coils(:,:,p,:,:,:) = circshift(in,shift);
 end
-
-% fold ne into np dimension
-coils = reshape(coils,[nx ny nz nc ne*np]);
-
-% reorder for pagesvd: np nc nx ny nz
-coils = permute(coils,[5 4 1 2 3]);
+coils = reshape(coils,nc,ne*np,nx,ny,nz);
 
 % optimal filter per pixel
-[~,noise,coils] = pagesvd(coils,'econ','vector');
+[coils noise] = pagesvd(coils,'econ','vector');
 
-% largest component only
-coils = coils(:,1,:,:,:);
+% keep largest component
+coils = coils(:,1,:,:,:,:);
 
-% reorder for dot: nx ny nz nc 1
-coils = permute(coils,[3 4 5 1 2]);
+% coil combined image
+out = pagemtimes(coils,'ctranspose',in,'none');
 
-% noise std estimate?
-noise = mean(reshape(noise(2:end,:,:,:,:),[],1)) / sqrt(ne*np);
+% noise std from 2nd component (?)
+noise = mean(reshape(noise(2,:,:,:,:),[],1)) / sqrt(np);
 
-%% final image
-im = sum(coils.*data,dim);
-
-% collape coil dimension
-im = reshape(im,[nx ny nz ne]);
+%% original shape (collapsed coil dim)
+out = ipermute(out,order);
+sz(dim) = 1;
+out = reshape(out,sz);
