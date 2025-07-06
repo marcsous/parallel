@@ -1,15 +1,17 @@
 function [out coils noise] = matched_filter(in,dim,np)
+%function [out coils noise] = matched_filter(in,dim,np)
+%
 % Matched filter coil combination (Walsh MRM 2000;43:682)
 %
 % Inputs
-%  in: array of complex images [2D,3D,4D] 
-%  dim: the coil dimension (default=last)
-%  np: no. pixels in the neighborhood (default=200)
+%  in: array of complex images [2D or 3D] 
+%  dim: coil dimension (default=last)
+%  np: pixels in neighborhood (default=200)
 %
 % Output:
 %  out = combined image [same as input with nc=1] 
-%  coils = the optimal filters used
-%  noise = noise std estimate (maybe?)
+%  coils = filters s.t. out = sum(coils.*in,dim)
+%  noise = noise std estimate (maybe not reliable)
 %
 % Neighborhood does not extend over slices (thickness >> pixel).
 % Extra dimensions after the coil dim (e.g. TE,TI) are included.
@@ -98,7 +100,14 @@ out = pagemtimes(coils,'ctranspose',in,'none');
 % noise std from 2nd component (?)
 noise = mean(reshape(noise(2,:,:,:,:),[],1)) / sqrt(np);
 
-%% original shape (collapsed coil dim)
+%% original shape
 out = ipermute(out,order);
 sz(dim) = 1;
 out = reshape(out,sz);
+
+if nargout>1
+    sz(dim) = nc;    
+    coils = conj(coils);
+    coils = ipermute(coils,order);
+    coils = reshape(coils,sz(1:dim));
+end
