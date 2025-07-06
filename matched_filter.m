@@ -8,13 +8,13 @@ function [out coils noise] = matched_filter(in,dim,np)
 %  dim: coil dimension (default=last)
 %  np: pixels in neighborhood (default=200)
 %
-% Output:
-%  out = combined image [same as input with nc=1] 
-%  coils = filters s.t. out = sum(coils.*in,dim)
-%  noise = noise std estimate (maybe not reliable)
+% Outputs
+%  out: combined image [same as input with nc=1] 
+%  coils: filters s.t. out = sum(coils.*in,dim)
+%  noise: noise std estimate (maybe not reliable)
 %
-% Neighborhood does not extend over slices (thickness >> pixel).
-% Extra dimensions after the coil dim (e.g. TE,TI) are included.
+% Neighborhood does not include slices (thickness >> pixel).
+% Dimensions after the coil dim (e.g. TE,TI) are included.
 %
 %% size - 1D, 2D, 3D, extra dimensions
 sz = size(in);
