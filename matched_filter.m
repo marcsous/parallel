@@ -24,29 +24,29 @@ if isempty(in) || numel(sz)<3
 end
 if ~exist('dim','var') || isempty(dim)
     dim = numel(sz); % assume last dimension is coils
-elseif ~isscalar(dim) || dim<1 || dim>numel(sz) || mod(dim,1)
+elseif ~isscalar(dim) || dim<2 || dim>numel(sz) || mod(dim,1)
     error('dim is out of range');
 end
 
 % coil dimension
 nc = sz(dim);
 
-% in-plane dimensions
+% spatial dimensions
 nx = sz(1);
-ny = sz(2);
 
-% slice dimension
-if dim==3
-    nz = 1;
-else
-    nz = sz(3);
+switch dim
+    case 2; nz = 1; ny = 1; 
+    case 3; nz = 1; ny = sz(2);
+    otherwise; ny = sz(2); nz = sz(3);
 end
 
 % extra dimensions
 ne = prod(sz(dim:end)) / nc;
 
-%% neighborhood of np nearest pixels (symmetric about center)
+% form consistent shape
+in = reshape(in,[nx ny nz nc ne]);
 
+%% neighborhood of np nearest pixels (symmetric about center)
 if ~exist('np','var') || isempty(np)
     np = 200; % np = 200 is 90% optimal
 else
@@ -74,31 +74,27 @@ x = x(k); y = y(k);
 
 fprintf('%s: [%i %i %i] nc=%i ne=%i np=%i r=%.3f\n',mfilename,nx,ny,nz,nc,ne,np*ne,r(np));
 
-%% permute for fast page operations
-in = reshape(in,[nx ny nz nc ne]);
-order = [4 5 1 2 3]; % [nc ne nx ny nz]
-in = permute(in,order); 
-
-%% construct matched filter
-coils = zeros(nc,ne,np,nx,ny,nz,'like',in);
-
+%% construct filter
+coils = zeros(nx,ny,nz,nc,ne,np,'like',in);
 for p = 1:np
-    shift = [0 0 x(p) y(p)];
-    coils(:,:,p,:,:,:) = circshift(in,shift);
+    shift = [x(p) y(p)];
+    coils(:,:,:,:,:,p) = circshift(in,shift);
 end
-coils = reshape(coils,nc,ne*np,nx,ny,nz);
+coils = reshape(coils,[nx ny nz nc ne*np]);
 
-% optimal filter per pixel
+% permute for fast page operations
+order = [4 5 1 2 3];
+in = permute(in,order);
+coils = permute(coils,order);
+
+% optimal filters (per pixel)
 [coils noise] = pagesvd(coils,'econ','vector');
 
 % keep largest component
 coils = coils(:,1,:,:,:,:);
 
-% coil combined image
+% dot product the filter with the signal
 out = pagemtimes(coils,'ctranspose',in,'none');
-
-% noise std from 2nd component (?)
-noise = mean(reshape(noise(2,:,:,:,:),[],1)) / sqrt(np);
 
 %% original shape
 out = ipermute(out,order);
@@ -110,4 +106,8 @@ if nargout>1
     coils = conj(coils);
     coils = ipermute(coils,order);
     coils = reshape(coils,sz(1:dim));
+end
+
+if nargout>2
+    noise = mean(reshape(noise(2,:,:,:,:),[],1)) / sqrt(np*ne);
 end
