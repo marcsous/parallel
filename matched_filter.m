@@ -37,7 +37,7 @@ nx = sz(1);
 switch dim
     case 2; ny = 1; nz = 1;
     case 3; ny = sz(2); nz = 1; 
-    otherwise; ny = sz(2); nz = sz(3);
+    case 4; ny = sz(2); nz = sz(3);
 end
 
 % extra dimensions
@@ -69,6 +69,10 @@ y = y(valid);
 % sort by radius
 r = hypot(x,y);
 [r k] = sort(reshape(r,[],1));
+
+% exclude r=0 (self-correlation)
+r = r(2:end);
+k = k(2:end);
 
 % pick closest symmetric kernel to np points
 ok = find(diff(r));
