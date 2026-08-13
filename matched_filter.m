@@ -1,5 +1,5 @@
-function [out coils noise] = matched_filter(in,dim,np)
-%function [out coils noise] = matched_filter(in,dim,np)
+function [out coils noise] = matched_filter(in,dim,np,Rn,cflag)
+%function [out coils noise] = matched_filter(in,dim,np,Rn,cflag)
 %
 % Matched filter coil combination (Walsh MRM 2000;43:682)
 %
@@ -7,6 +7,8 @@ function [out coils noise] = matched_filter(in,dim,np)
 %  in: array [nx nc ...], [nx ny nc ...] or [nx ny nz nc ...] 
 %  dim: coil dimension (default=last)
 %  np: no. pixels in neighborhood (default=200)
+%  Rn: noise correlation matrix [nc nc] (default=eye(nc))
+%  cflag: include center point in neighborhood (default=false)
 %
 % Outputs
 %  out: combined image [same as input with nc=1] 
@@ -24,12 +26,9 @@ if isempty(in) || numel(sz)<2
 end
 if ~exist('dim','var') || isempty(dim)
     dim = numel(sz); % assume last dimension is coils
-elseif ~isscalar(dim) || dim<2 || dim>4 || mod(dim,1)
-    error('dim is not valid');
+elseif ~isscalar(dim)
+    error('dim must be a scalar');
 end
-
-% coil dimension
-nc = sz(dim);
 
 % spatial dimensions
 nx = sz(1);
@@ -38,10 +37,31 @@ switch dim
     case 2; ny = 1; nz = 1;
     case 3; ny = sz(2); nz = 1; 
     case 4; ny = sz(2); nz = sz(3);
+    otherwise; error('dim is not valid');
 end
+
+% coil dimension
+nc = sz(dim);
 
 % extra dimensions
 ne = prod(sz(dim:end)) / nc;
+
+% force consistent shape internally
+in = reshape(in,[nx ny nz nc ne]);
+
+% check decorrelation matrix 
+if ~exist('Rn','var') || isempty(Rn)
+    Rn = [];
+elseif ~isequal(size(Rn),[nc nc]) && ~isequal(size(Rn),[nc nc nz])
+    error('Rn is the wrong size');
+end
+
+% center point flag
+if ~exist('cflag','var') || isempty(cflag)
+    cflag = false;
+elseif ~islogical(cflag)
+    error('cflag must be true or false');
+end
 
 %% neighborhood of np nearest pixels (symmetric about center)
 if ~exist('np','var') || isempty(np)
@@ -50,7 +70,7 @@ else
     np = max(nc,np); % lower limit
 end 
 
-% catch silliness (prevent crash)
+% catch silliness
 if np > 1000
     error('neighborhood size (np=%i) is too large',np);
 end
@@ -71,8 +91,10 @@ r = hypot(x,y);
 [r k] = sort(reshape(r,[],1));
 
 % exclude r=0 (self-correlation)
-r = r(2:end);
-k = k(2:end);
+if ~cflag
+    r = r(2:end);
+    k = k(2:end);
+end
 
 % pick closest symmetric kernel to np points
 ok = find(diff(r));
@@ -80,36 +102,66 @@ ok = find(diff(r));
 np = ok(j); k = k(1:np);
 x = x(k); y = y(k);
 
-fprintf('%s: [%i %i %i] nc=%i ne=%i np=%i r=%.3f\n',mfilename,nx,ny,nz,nc,ne,np*ne,r(np));
-
-%% construct filter
-coils = zeros(nx,ny,nz,nc,ne,np,'like',in);
-for p = 1:np
-    shift = [x(p) y(p)];
-    tmp = circshift(in,shift);
-    coils(:,:,:,:,:,p) = reshape(tmp,[nx ny nz nc ne]);
-end
-coils = reshape(coils,[nx ny nz nc ne*np]);
+%% construct filters: fft version
+t = tic;
 
 % permute for fast page operations
-order = [4 5 1 2 3];
-coils = permute(coils,order);
+order = [5 4 3 1 2]; % [ne nc nz nx ny]
 
-% optimal filters (per pixel)
-[coils noise] = pagesvd(coils,'econ','vector');
-coils = coils(:,1,:,:,:,:); % largest component
+% neighborhood mask with periodic boundary (c.f. circshift)
+mask = zeros(nx,ny,'like',real(in));
+idx = sub2ind([nx ny],mod(x,nx)+1,mod(y,ny)+1);
+mask(idx) = nx*ny; mask = ifft2(mask,'symmetric');
 
-% undo permute
-coils = ipermute(coils,order);
+% each slice separately
+for z = 1:nz
+
+    % current slice z
+    in_z = permute(in(:,:,z,:,:),order);
+
+    % coil correlation
+    C = pagemtimes(in_z,'ctranspose',in_z,'none');
+    
+    % neighborhood mask
+    C = fft(fft(C,[],4),[],5);
+    C = C.*reshape(mask,[1 1 1 nx ny]);
+    C = ifft(ifft(C,[],5),[],4);
+
+    % decorrelate coils: C_decorr = Rn_i' * C * Rn_i
+    if ~isempty(Rn)
+        Rn_z = Rn(:,:,min(z,size(Rn,3)));
+        Rn_i = pinv(Rn_z * sqrt(nc) / norm(Rn_z,'fro'));
+        C = pagemtimes(Rn_i,'ctranspose',pagemtimes(C,'none',Rn_i,'none'),'none');
+    end
+
+    % principal component
+    [V S] = pagesvd(C,'vector');
+    V = V(:,1,:,:,:,:);
+
+    % undo permute
+    V = ipermute(V,order);
+
+    % build coils [nx ny nz nc]
+    coils(:,:,z,:) = reshape(V,[nx ny 1 nc]);
+
+    % std dev estimate
+    tmp = nonzeros(S(2:end,:));
+    noise(z) = sqrt(mean(tmp) / (np*ne)); % normal eqns
+
+end
+
+in = reshape(in,sz);
 coils = reshape(coils,sz(1:dim));
 
-%% dot-product filter with input 
+%% display
+fprintf('%s: [%ix%i',mfilename,nx,ny);
+if nz>1; fprintf('x%i',nz); end
+fprintf('] nc=%i ne=%i np=%i. ',nc,ne,np*ne);
+toc(t);
 
-% dot doesn't do broadcast operations so do it manually
-coils = conj(coils);
+%% dot-product filter with input 
 out = sum(coils.*in,dim);
 
-% std dev estimate (dodgy)
 if nargout>2
-    noise = mean(reshape(noise(2,:,:,:,:),[],1)) / sqrt(np*ne);
+    noise = mean(noise);
 end
