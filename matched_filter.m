@@ -6,12 +6,12 @@ function [out coils noise] = matched_filter(in,dim,np,Rn,cflag)
 % Inputs
 %  in: array [nx nc ...], [nx ny nc ...] or [nx ny nz nc ...] 
 %  dim: coil dimension (default=last)
-%  np: no. pixels in neighborhood (default=200)
-%  Rn: noise correlation matrix [nc nc] (default=eye(nc))
+%  np: target no. pixels in neighborhood (default=200)
+%  Rn: noise correlation matrix [nc nc nz] (default=identity)
 %  cflag: include center point in neighborhood (default=false)
 %
 % Outputs
-%  out: combined image [same as input with nc=1] 
+%  out: combined image [same size as input with nc=1] 
 %  coils: filters s.t. out = sum(coils.*in,dim)
 %  noise: noise std estimate (maybe not reliable)
 %
@@ -50,9 +50,11 @@ ne = prod(sz(dim:end)) / nc;
 in = reshape(in,[nx ny nz nc ne]);
 
 % check decorrelation matrix 
-if ~exist('Rn','var') || isempty(Rn)
+if ~exist('Rn','var')
     Rn = [];
-elseif ~isequal(size(Rn),[nc nc]) && ~isequal(size(Rn),[nc nc nz])
+elseif isequal(size(Rn),[nc nc])
+    Rn = repmat(Rn,[1 1 nz]);
+elseif ~isequal(size(Rn),[nc nc nz])
     error('Rn is the wrong size');
 end
 
@@ -75,7 +77,7 @@ if np > 1000
     error('neighborhood size (np=%i) is too large',np);
 end
 
-% indices of an LxL neighborhood
+% define an LxL neighborhood
 L = np/ne; % probably way too large
 [x y] = ndgrid(-ceil(L/2):ceil(L/2));
 
@@ -102,8 +104,12 @@ ok = find(diff(r));
 np = ok(j); k = k(1:np);
 x = x(k); y = y(k);
 
+%% display
+fprintf('%s: [%ix%i',mfilename,nx,ny);
+if nz>1; fprintf('x%i',nz); end
+fprintf('] nc=%i ne=%i np=%i\n',nc,ne,np*ne);
+
 %% construct filters: fft version
-t = tic;
 
 % permute for fast page operations
 order = [5 4 3 1 2]; % [ne nc nz nx ny]
@@ -113,53 +119,40 @@ mask = zeros(nx,ny,'like',real(in));
 idx = sub2ind([nx ny],mod(x,nx)+1,mod(y,ny)+1);
 mask(idx) = nx*ny; mask = ifft2(mask,'symmetric');
 
-% each slice separately
-for z = 1:nz
+% permute for fast page operations
+in = permute(in,order);
 
-    % current slice z
-    in_z = permute(in(:,:,z,:,:),order);
+% coil correlation (Rs' * Rs)
+C = pagemtimes(in,'ctranspose',in,'none');
 
-    % coil correlation
-    C = pagemtimes(in_z,'ctranspose',in_z,'none');
-    
-    % neighborhood mask
-    C = fft(fft(C,[],4),[],5);
-    C = C.*reshape(mask,[1 1 1 nx ny]);
-    C = ifft(ifft(C,[],5),[],4);
+% spatial correlation
+C = fft(fft(C,[],4),[],5);
+C = C.*reshape(mask,[1 1 1 nx ny]);
+C = ifft(ifft(C,[],5),[],4);
 
-    % decorrelate coils: C_decorr = Rn_i' * C * Rn_i
-    if ~isempty(Rn)
-        Rn_z = Rn(:,:,min(z,size(Rn,3)));
-        Rn_i = pinv(Rn_z * sqrt(nc) / norm(Rn_z,'fro'));
-        C = pagemtimes(Rn_i,'ctranspose',pagemtimes(C,'none',Rn_i,'none'),'none');
-    end
-
-    % principal component
-    [V S] = pagesvd(C,'vector');
-    V = V(:,1,:,:,:,:);
-
-    % undo permute
-    V = ipermute(V,order);
-
-    % build coils [nx ny nz nc]
-    coils(:,:,z,:) = reshape(V,[nx ny 1 nc]);
-
-    % std dev estimate
-    tmp = nonzeros(S(2:end,:));
-    noise(z) = sqrt(mean(tmp) / (np*ne)); % normal eqns
-
+% decorrelate coils: C_decorr = iRn' * C * iRn
+if ~isempty(Rn)
+    iRn = pagepinv(Rn) .* (sqrt(nc) ./ pagenorm(Rn,'fro'));
+    C = pagemtimes(iRn,'ctranspose',pagemtimes(C,'none',iRn,'none'),'none');
 end
 
-in = reshape(in,sz);
-coils = reshape(coils,sz(1:dim));
+% principal component
+[V S] = pagesvd(C,'vector');
+V = V(:,1,:,:,:,:);
 
-%% display
-fprintf('%s: [%ix%i',mfilename,nx,ny);
-if nz>1; fprintf('x%i',nz); end
-fprintf('] nc=%i ne=%i np=%i. ',nc,ne,np*ne);
-toc(t);
+% undo permute
+V = ipermute(V,order);
+
+% build coils
+coils = reshape(V,sz(1:dim));
+
+% std dev estimate
+tmp = nonzeros(S(2:end,:));
+noise = sqrt(mean(tmp) / (np*ne)); % normal eqns
 
 %% dot-product filter with input 
+in = ipermute(in,order);
+in = reshape(in,sz);
 out = sum(coils.*in,dim);
 
 if nargout>2
