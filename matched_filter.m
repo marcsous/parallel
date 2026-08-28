@@ -159,5 +159,4 @@ end
 if nargout>2
     tmp = nonzeros(S(2:end,:));
     noise = sqrt(mean(tmp) / (np*ne)); % normal eqns
-    noise = mean(noise);
 end
