@@ -41,27 +41,25 @@ switch dim
 end
 
 % coil dimension
+if dim>numel(sz)
+    sz(dim) = 1;
+end
 nc = sz(dim);
 
 % extra dimensions
 ne = prod(sz(dim:end)) / nc;
 
-% force consistent shape internally
-in = reshape(in,[nx ny nz nc ne]);
-
-% check decorrelation matrix 
-if ~exist('Rn','var')
+% check decorrelation matrix
+if ~exist('Rn','var') || isempty(Rn)
     Rn = [];
-elseif isequal(size(Rn),[nc nc])
-    Rn = repmat(Rn,[1 1 nz]);
-elseif ~isequal(size(Rn),[nc nc nz])
+elseif ~isequal(size(Rn),[nc nc nz]) % allow [nc nc]?
     error('Rn is the wrong size');
 end
 
 % center point flag
 if ~exist('cflag','var') || isempty(cflag)
     cflag = false;
-elseif ~islogical(cflag)
+elseif ~isscalar(cflag) || ~islogical(cflag)
     error('cflag must be true or false');
 end
 
@@ -111,15 +109,16 @@ fprintf('] nc=%i ne=%i np=%i\n',nc,ne,np*ne);
 
 %% construct filters: fft version
 
-% permute for fast page operations
-order = [5 4 3 1 2]; % [ne nc nz nx ny]
-
-% neighborhood mask with periodic boundary (c.f. circshift)
-mask = zeros(nx,ny,'like',real(in));
+% neighborhood mask with periodic boundary (circular convolution)
+mask = zeros(nx,ny,'like',in);
 idx = sub2ind([nx ny],mod(x,nx)+1,mod(y,ny)+1);
 mask(idx) = nx*ny; mask = ifft2(mask,'symmetric');
 
+% force consistent shape internally
+in = reshape(in,[nx ny nz nc ne]);
+
 % permute for fast page operations
+order = [5 4 3 1 2]; % [ne nc nz nx ny]
 in = permute(in,order);
 
 % coil correlation (Rs' * Rs)
@@ -132,7 +131,7 @@ C = ifft(ifft(C,[],5),[],4);
 
 % decorrelate coils: C_decorr = iRn' * C * iRn
 if ~isempty(Rn)
-    iRn = pagepinv(Rn) .* (sqrt(nc) ./ pagenorm(Rn,'fro'));
+    iRn = pagepinv(Rn) .* pagenorm(Rn,'fro') / sqrt(nc);
     C = pagemtimes(iRn,'ctranspose',pagemtimes(C,'none',iRn,'none'),'none');
 end
 
@@ -140,21 +139,25 @@ end
 [V S] = pagesvd(C,'vector');
 V = V(:,1,:,:,:,:);
 
-% undo permute
-V = ipermute(V,order);
+% dot-product filter with input
+out = pagemtimes(in,V);
 
-% build coils
-coils = reshape(V,sz(1:dim));
+%% return arguments
+
+% out same shape as in
+out = ipermute(out,order);
+tmp = sz; tmp(dim) = 1;
+out = reshape(out,tmp);
+
+% coils s.t. out = sum(coils.*in,dim)
+if nargout>1
+    coils = ipermute(V,order);
+    coils = reshape(coils,sz(1:dim));
+end
 
 % std dev estimate
-tmp = nonzeros(S(2:end,:));
-noise = sqrt(mean(tmp) / (np*ne)); % normal eqns
-
-%% dot-product filter with input 
-in = ipermute(in,order);
-in = reshape(in,sz);
-out = sum(coils.*in,dim);
-
 if nargout>2
+    tmp = nonzeros(S(2:end,:));
+    noise = sqrt(mean(tmp) / (np*ne)); % normal eqns
     noise = mean(noise);
 end
