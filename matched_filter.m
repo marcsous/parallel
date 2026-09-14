@@ -8,7 +8,7 @@ function [out coils noise] = matched_filter(in,dim,np,Rn,cflag)
 %  dim: coil dimension (default=last)
 %  np: target no. pixels in neighborhood (default=200)
 %  Rn: noise correlation matrix [nc nc nz] (default=identity)
-%  cflag: include center point in neighborhood (default=false)
+%  cflag: conjugate coils to impose smooth phase (default=false)
 %
 % Outputs
 %  out: combined image [same size as input with nc=1] 
@@ -91,10 +91,8 @@ r = hypot(x,y);
 [r k] = sort(reshape(r,[],1));
 
 % exclude r=0 (self-correlation)
-if ~cflag
-    r = r(2:end);
-    k = k(2:end);
-end
+r = r(2:end);
+k = k(2:end);
 
 % pick closest symmetric kernel to np points
 ok = find(diff(r));
@@ -124,16 +122,23 @@ in = permute(in,order);
 % coil correlation (Rs' * Rs)
 C = pagemtimes(in,'ctranspose',in,'none');
 
-% spatial correlation
-C = fft(fft(C,[],4),[],5);
-C = C.*reshape(mask,[1 1 1 nx ny]);
-C = ifft(ifft(C,[],5),[],4);
-
 % decorrelate coils: C_decorr = iRn' * C * iRn
 if ~isempty(Rn)
     iRn = pagepinv(Rn) .* pagenorm(Rn,'fro') / sqrt(nc);
     C = pagemtimes(iRn,'ctranspose',pagemtimes(C,'none',iRn,'none'),'none');
 end
+
+% conjugate coils
+if cflag
+    PC = pagemtimes(in,'transpose',in,'none');;
+    C = [C conj(PC); PC conj(C)];
+    in = cat(2,in,conj(in)) / sqrt(2);
+end
+
+% spatial correlation
+C = fft(fft(C,[],4),[],5);
+C = C.*reshape(mask,[1 1 1 nx ny]);
+C = ifft(ifft(C,[],5),[],4);
 
 % principal component
 [V S] = pagesvd(C,'vector');
@@ -146,12 +151,13 @@ out = pagemtimes(in,V);
 
 % out same shape as in
 out = ipermute(out,order);
-tmp = sz; tmp(dim) = 1;
-out = reshape(out,tmp);
+sz(dim) = 1;
+out = reshape(out,sz);
 
 % coils s.t. out = sum(coils.*in,dim)
 if nargout>1
     coils = ipermute(V,order);
+    sz(dim) = nc * (1+cflag);
     coils = reshape(coils,sz(1:dim));
 end
 
