@@ -56,7 +56,7 @@ elseif ~isequal(size(Rn),[nc nc nz]) % allow [nc nc]?
     error('Rn is the wrong size');
 end
 
-% center point flag
+% conjugate coils flag
 if ~exist('cflag','var') || isempty(cflag)
     cflag = false;
 elseif ~isscalar(cflag) || ~islogical(cflag)
@@ -90,7 +90,7 @@ y = y(valid);
 r = hypot(x,y);
 [r k] = sort(reshape(r,[],1));
 
-% exclude r=0 (self-correlation)
+% exclude r=0 point (self-correlation)
 r = r(2:end);
 k = k(2:end);
 
@@ -154,15 +154,15 @@ out = ipermute(out,order);
 sz(dim) = 1;
 out = reshape(out,sz);
 
-% coils s.t. out = sum(coils.*in,dim)
+% coils (cflag needs work)
 if nargout>1
     coils = ipermute(V,order);
-    sz(dim) = nc * (1+cflag);
+    sz(dim) = nc * (1+cflag); 
     coils = reshape(coils,sz(1:dim));
 end
 
-% std dev estimate
+% std dev estimate (cflag needs work)
 if nargout>2
     tmp = nonzeros(S(2:end,:));
-    noise = sqrt(mean(tmp) / (np*ne)); % normal eqns
+    noise = sqrt(mean(tmp) / (np*ne)) / (1+cflag);
 end
